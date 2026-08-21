@@ -310,10 +310,6 @@ class ArchipelagoMonitor:
 
     async def handle_packet(self, packets):
         for pkt in packets:
-            
-            if "DeathLink" in pkt.get("tags", []):
-                #await self.handle_bounce(pkt)
-                print("FDP DE MMERDE")
             cmd = pkt.get("cmd")
             log.info("[%s] Paquet reçu: %s", self.server_url, cmd)
             log.info("[%s] Tags reçu: %s", self.server_url, pkt.get("tags", []))
@@ -341,7 +337,7 @@ class ArchipelagoMonitor:
             elif cmd == "PrintJSON":
                 await self.handle_print_json(pkt)
 
-            elif cmd == "Bounced": #c'est le deathlink askip mais c'est de la merde xD
+            elif cmd == "Bounced":
                 await self.handle_bounce(pkt)
 
     async def handle_print_json(self, pkt):
