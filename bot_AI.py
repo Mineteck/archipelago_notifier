@@ -27,63 +27,72 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 import websockets
+from dotenv import load_dotenv
+import os
 
+load_dotenv()
 # ---------------------------------------------------------------------------
 # CONFIG - à adapter
 # ---------------------------------------------------------------------------
 
-DISCORD_BOT_TOKEN = "xxx"
-NOTIFY_CHANNEL_ID = 965590122529689670      # ID du salon où poster les notifs
+DISCORD_BOT_TOKEN = os.getenv("DISCORD_TOKEN")
+NOTIFY_CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
 
-AP_SERVER = "wss://archipelago.gg:62811"    # adresse:port de la room AP
-AP_GAME = "Baldur's Gate 3"                          # nom du jeu tel que dans le yaml
-# Multiworld: pas besoin d'un slot précis pour écouter tout le monde,
-# on se connecte en spectateur/texte pour voir passer tous les items.
-AP_MONITOR_SLOT = "Portier"                      # laisse None -> connexion "TextOnly" / spectateur si supporté par la room
 
-AP_MONITOR_PASSWORD = ""    
-LINKS_FILE = Path("links.json")             # discord_user_id -> slot_name (et inverse)
+ROOMS_FILE = Path("links.json")
  
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger("ap-discord-bot")
  
 # ---------------------------------------------------------------------------
-# Stockage des liaisons utilisateur <-> slot
+# Config des rooms
 # ---------------------------------------------------------------------------
  
  
-class LinkStore:
+class RoomsConfig:
+    """Charge et recharge rooms.json à la demande."""
+ 
     def __init__(self, path: Path):
         self.path = path
-        self.data: dict[str, int] = {}  # slot_name (lower) -> discord_user_id
+        self.rooms: dict = {}
         self.load()
  
     def load(self):
-        if self.path.exists():
-            self.data = json.loads(self.path.read_text())
+        if not self.path.exists():
+            log.warning("%s introuvable, aucune room configurée.", self.path)
+            self.rooms = {}
+            return
+        self.rooms = json.loads(self.path.read_text(encoding="utf-8"))
+        log.info("Config chargée : %d room(s)", len(self.rooms))
  
-    def save(self):
-        self.path.write_text(json.dumps(self.data, indent=2))
+    def server_urls(self) -> list[str]:
+        return list(self.rooms.keys())
  
-    def link(self, slot_name: str, discord_id: int):
-        self.data[slot_name.lower()] = discord_id
-        self.save()
+    def password_for(self, server_url: str) -> str:
+        return self.rooms.get(server_url, {}).get("password", "") or ""
  
-    def unlink(self, slot_name: str) -> bool:
-        removed = self.data.pop(slot_name.lower(), None)
-        if removed is not None:
-            self.save()
-            return True
-        return False
+    def slots_for(self, server_url: str) -> dict:
+        return self.rooms.get(server_url, {}).get("slot", {})
  
-    def discord_id_for_slot(self, slot_name: str) -> int | None:
-        return self.data.get(slot_name.lower())
+    def user_id_for(self, server_url: str, slot_name: str) -> int | None:
+        entry = self.slots_for(server_url).get(slot_name)
+        return entry.get("user_id") if entry else None
  
-    def all(self) -> dict[str, int]:
-        return dict(self.data)
+    def game_for(self, server_url: str, slot_name: str) -> str | None:
+        entry = self.slots_for(server_url).get(slot_name)
+        return entry.get("game") if entry else None
+ 
+    def any_slot_name(self, server_url: str) -> str | None:
+        """Un nom de slot quelconque pour cette room, utilisé pour la connexion
+        de surveillance (le protocole AP exige un slot réel pour se connecter)."""
+        slots = self.slots_for(server_url)
+        return next(iter(slots), None)
+ 
+    def games_for(self, server_url: str) -> list[str]:
+        return sorted({v["game"] for v in self.slots_for(server_url).values()})
  
  
-links = LinkStore(LINKS_FILE)
+rooms_config = RoomsConfig(ROOMS_FILE)
  
 # ---------------------------------------------------------------------------
 # Bot Discord
@@ -92,89 +101,101 @@ links = LinkStore(LINKS_FILE)
 intents = discord.Intents.default()
 bot = commands.Bot(command_prefix="!", intents=intents)
  
+# gardé en mémoire pour pouvoir stopper/redémarrer les tâches de surveillance
+monitor_tasks: dict[str, asyncio.Task] = {}
+ 
  
 @bot.event
 async def on_ready():
     log.info("Bot connecté en tant que %s", bot.user)
     await bot.tree.sync()
-    bot.loop.create_task(archipelago_loop())
+    start_all_monitors()
  
  
-@bot.tree.command(name="link", description="Lie ton compte Discord à ton nom de slot Archipelago")
-@app_commands.describe(slot_name="Ton nom de slot exact dans la room Archipelago")
-async def link_cmd(interaction: discord.Interaction, slot_name: str):
-    links.link(slot_name, interaction.user.id)
+def start_all_monitors():
+    for server_url in rooms_config.server_urls():
+        if server_url in monitor_tasks and not monitor_tasks[server_url].done():
+            continue
+        monitor_tasks[server_url] = bot.loop.create_task(archipelago_loop(server_url))
+ 
+ 
+@bot.tree.command(name="reload_rooms", description="Recharge rooms.json et (re)démarre les surveillances manquantes")
+async def reload_rooms_cmd(interaction: discord.Interaction):
+    rooms_config.load()
+    start_all_monitors()
     await interaction.response.send_message(
-        f"✅ Slot **{slot_name}** lié à {interaction.user.mention}. "
-        f"Tu seras pingé ici quand ce slot recevra un item.",
+        f"🔄 Config rechargée : {len(rooms_config.server_urls())} room(s) surveillée(s).",
         ephemeral=True,
     )
  
  
-@bot.tree.command(name="unlink", description="Supprime la liaison pour un slot Archipelago")
-@app_commands.describe(slot_name="Le nom de slot à délier")
-async def unlink_cmd(interaction: discord.Interaction, slot_name: str):
-    ok = links.unlink(slot_name)
-    if ok:
-        await interaction.response.send_message(f"🗑️ Liaison supprimée pour **{slot_name}**.", ephemeral=True)
-    else:
-        await interaction.response.send_message(f"Aucune liaison trouvée pour **{slot_name}**.", ephemeral=True)
- 
- 
-@bot.tree.command(name="links", description="Liste les liaisons slot <-> utilisateur connues")
-async def links_cmd(interaction: discord.Interaction):
-    all_links = links.all()
-    if not all_links:
-        await interaction.response.send_message("Aucune liaison enregistrée pour le moment.", ephemeral=True)
+@bot.tree.command(name="rooms", description="Liste les rooms et slots actuellement surveillés")
+async def rooms_cmd(interaction: discord.Interaction):
+    if not rooms_config.rooms:
+        await interaction.response.send_message("Aucune room configurée dans rooms.json.", ephemeral=True)
         return
-    lines = [f"**{slot}** → <@{uid}>" for slot, uid in all_links.items()]
+ 
+    lines = []
+    for server_url in rooms_config.server_urls():
+        lines.append(f"**{server_url}**")
+        for slot_name, info in rooms_config.slots_for(server_url).items():
+            lines.append(f"  • {slot_name} ({info.get('game')}) → <@{info.get('user_id')}>")
     await interaction.response.send_message("\n".join(lines), ephemeral=True)
  
  
-async def notify_item_received(slot_name: str, item_name: str, sender_name: str, receiver_name: str):
+async def notify_item_received(server_url: str, receiver_slot: str, item_name: str, sender_name: str):
     channel = bot.get_channel(NOTIFY_CHANNEL_ID)
     if channel is None:
         log.warning("Salon de notification introuvable (ID %s)", NOTIFY_CHANNEL_ID)
         return
  
-    discord_id = links.discord_id_for_slot(slot_name)
-    mention = f"<@{discord_id}>" if discord_id else f"**{slot_name}**"
+    user_id = rooms_config.user_id_for(server_url, receiver_slot)
+    mention = f"<@{user_id}>" if user_id else f"**{receiver_slot}**"
  
     await channel.send(f"🎁 {mention} a reçu **{item_name}** (envoyé par {sender_name})")
  
  
 # ---------------------------------------------------------------------------
-# Client Archipelago (tâche de fond)
+# Client Archipelago (une tâche de fond par room)
 # ---------------------------------------------------------------------------
  
  
 class ArchipelagoMonitor:
     """
-    Se connecte au serveur AP et suit TOUS les échanges d'items de la room
-    (pas seulement ceux d'un slot précis), en écoutant les messages
-    PrintJSON de type 'ItemSend', qui contiennent l'expéditeur et le
-    destinataire pour chaque item envoyé dans le multiworld.
+    Se connecte à une room Archipelago avec un slot réel (le protocole AP
+    l'exige) et suit TOUS les échanges d'items de la room via les messages
+    PrintJSON de type 'ItemSend', diffusés à tous les clients connectés
+    quel que soit leur slot.
     """
  
-    def __init__(self, server: str, game: str, slot_name: str, password: str = ""):
-        self.server = server
-        self.game = game
-        self.slot_name = slot_name
-        self.password = password
+    def __init__(self, server_url: str, config: RoomsConfig):
+        self.server_url = server_url
+        self.config = config
+ 
+        self.connect_slot_name = config.any_slot_name(server_url)
+        self.connect_game = config.game_for(server_url, self.connect_slot_name) if self.connect_slot_name else None
+        self.password = config.password_for(server_url)
+ 
         self.ws = None
-        self.item_id_to_name = {}
-        self.slot_names = {}  # slot number -> slot name
+        # item_id_to_name est indexé par jeu, car les IDs d'items sont
+        # spécifiques à chaque jeu dans Archipelago.
+        self.item_id_to_name: dict[str, dict[int, str]] = {}
+        self.slot_names: dict[int, str] = {}  # slot number -> slot name
  
     async def run(self):
+        if not self.connect_slot_name:
+            log.error("Aucun slot défini pour %s, impossible de surveiller cette room.", self.server_url)
+            return
+ 
         ssl_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
         ssl_ctx.check_hostname = False
         ssl_ctx.verify_mode = ssl.CERT_NONE
  
         async with websockets.connect(
-            self.server, ssl=ssl_ctx if self.server.startswith("wss") else None
+            self.server_url, ssl=ssl_ctx if self.server_url.startswith("wss") else None
         ) as ws:
             self.ws = ws
-            log.info("Connecté au serveur Archipelago %s", self.server)
+            log.info("[%s] Connecté au serveur Archipelago", self.server_url)
             async for raw in ws:
                 await self.handle_packet(json.loads(raw))
  
@@ -186,22 +207,24 @@ class ArchipelagoMonitor:
             cmd = pkt.get("cmd")
  
             if cmd == "RoomInfo":
-                await self.send([{"cmd": "GetDataPackage"}])
+                # On demande le datapackage uniquement pour les jeux utilisés
+                # dans cette room (tels que déclarés dans rooms.json).
+                games = self.config.games_for(self.server_url)
+                await self.send([{"cmd": "GetDataPackage", "games": games}])
  
             elif cmd == "DataPackage":
-                games = pkt["data"]["games"]
-                if self.game in games:
-                    self.item_id_to_name = {
-                        v: k for k, v in games[self.game]["item_name_to_id"].items()
+                for game_name, game_data in pkt["data"]["games"].items():
+                    self.item_id_to_name[game_name] = {
+                        v: k for k, v in game_data["item_name_to_id"].items()
                     }
-                await self.connect_spectator()
+                await self.connect_monitor()
  
             elif cmd == "Connected":
                 self.slot_names = {p["slot"]: p["name"] for p in pkt["players"]}
-                log.info("Moniteur connecté, %d joueurs dans la room", len(self.slot_names))
+                log.info("[%s] Surveillance active, %d joueur(s)", self.server_url, len(self.slot_names))
  
             elif cmd == "ConnectionRefused":
-                log.error("Connexion refusée: %s", pkt.get("errors"))
+                log.error("[%s] Connexion refusée: %s", self.server_url, pkt.get("errors"))
  
             elif cmd == "PrintJSON":
                 await self.handle_print_json(pkt)
@@ -213,23 +236,23 @@ class ArchipelagoMonitor:
         receiving_slot = pkt.get("receiving")
         sender_slot = item_data.get("player")
  
-        item_name = self.item_id_to_name.get(item_data.get("item"), f"Item#{item_data.get('item')}")
         receiver_name = self.slot_names.get(receiving_slot, f"Slot#{receiving_slot}")
         sender_name = self.slot_names.get(sender_slot, f"Slot#{sender_slot}")
  
-        await notify_item_received(receiver_name, item_name, sender_name, receiver_name)
+        # Le namespace de l'item ID dépend du jeu du DESTINATAIRE
+        receiver_game = self.config.game_for(self.server_url, receiver_name)
+        game_items = self.item_id_to_name.get(receiver_game, {})
+        item_name = game_items.get(item_data.get("item"), f"Item#{item_data.get('item')}")
  
-    async def connect_spectator(self):
-        # On se connecte avec un slot réel existant (obligatoire côté
-        # protocole AP). Le tag "TextOnly" évite que le serveur nous traite
-        # comme un vrai client de jeu. On voit quand même passer TOUS les
-        # ItemSend de la room, pas seulement ceux de ce slot.
+        await notify_item_received(self.server_url, receiver_name, item_name, sender_name)
+ 
+    async def connect_monitor(self):
         await self.send([{
             "cmd": "Connect",
-            "game": self.game,
-            "name": self.slot_name,
+            "game": self.connect_game,
+            "name": self.connect_slot_name,
             "password": self.password or None,
-            "uuid": "ap-discord-bot-monitor",
+            "uuid": f"ap-discord-bot-monitor-{self.server_url}",
             "version": {"major": 0, "minor": 5, "build": 0, "class": "Version"},
             "items_handling": 0,
             "tags": ["TextOnly"],
@@ -237,14 +260,14 @@ class ArchipelagoMonitor:
         }])
  
  
-async def archipelago_loop():
+async def archipelago_loop(server_url: str):
     await bot.wait_until_ready()
-    monitor = ArchipelagoMonitor(AP_SERVER, AP_GAME, AP_MONITOR_SLOT, AP_MONITOR_PASSWORD)
+    monitor = ArchipelagoMonitor(server_url, rooms_config)
     while not bot.is_closed():
         try:
             await monitor.run()
         except (websockets.ConnectionClosed, OSError) as e:
-            log.warning("Connexion Archipelago perdue (%s), nouvelle tentative dans 10s...", e)
+            log.warning("[%s] Connexion perdue (%s), nouvelle tentative dans 10s...", server_url, e)
             await asyncio.sleep(10)
  
  
