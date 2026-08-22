@@ -261,9 +261,25 @@ async def reset_deaths_cmd(interaction: discord.Interaction):
     await interaction.response.send_message("🔄 Compteur de morts remis à zéro.", ephemeral=True)
 
 
-@bot.tree.command(name="hints", description="Affiche les hints connus concernant un joueur")
+@bot.tree.command(name="hints", description="Affiche tous les hints connus concernant un joueur (tableau)")
 @app_commands.describe(slot_name="Le nom de slot Archipelago du joueur")
 async def hints_cmd(interaction: discord.Interaction, slot_name: str):
+    await _send_hints(interaction, slot_name, filter_mode=None)
+
+
+@bot.tree.command(name="hints_pour", description="Hints des objets DESTINÉS à ce joueur")
+@app_commands.describe(slot_name="Le nom de slot Archipelago du joueur")
+async def hints_pour_cmd(interaction: discord.Interaction, slot_name: str):
+    await _send_hints(interaction, slot_name, filter_mode="pour")
+
+
+@bot.tree.command(name="hints_chez", description="Hints des objets situés dans le monde de ce joueur")
+@app_commands.describe(slot_name="Le nom de slot Archipelago du joueur")
+async def hints_chez_cmd(interaction: discord.Interaction, slot_name: str):
+    await _send_hints(interaction, slot_name, filter_mode="chez")
+
+
+async def _send_hints(interaction: discord.Interaction, slot_name: str, filter_mode: str | None):
     server_url = rooms_config.find_server_for_slot(slot_name)
     if server_url is None:
         await interaction.response.send_message(
@@ -287,19 +303,26 @@ async def hints_cmd(interaction: discord.Interaction, slot_name: str):
         await interaction.followup.send("⏱️ Le serveur Archipelago n'a pas répondu à temps.")
         return
 
+    slot_num = monitor.slot_numbers.get(slot_name.lower())
+
+    if filter_mode == "pour":
+        hints = [h for h in hints if monitor.hints_for_slot(h, slot_num)]
+        title = f"🎯 Hints pour les objets destinés à **{slot_name}**"
+    elif filter_mode == "chez":
+        hints = [h for h in hints if monitor.hints_at_slot(h, slot_num)]
+        title = f"🗺️ Hints des objets situés chez **{slot_name}**"
+    else:
+        title = f"📋 Tous les hints concernant **{slot_name}**"
+
     if not hints:
-        await interaction.followup.send(f"Aucun hint connu pour **{slot_name}** pour l'instant.")
+        await interaction.followup.send(f"{title}\nAucun hint connu pour l'instant.")
         return
 
-    lines = [f"**Hints concernant {slot_name} :**"]
-    for h in hints:
-        if not h["found"]:
-            lines.append(monitor.format_hint(h))
+    table = monitor.build_hints_table(hints)
+    text = f"{title}\n{table}"
 
-    text = "\n".join(lines)
-    # Discord limite les messages à 2000 caractères
     if len(text) > 1900:
-        text = text[:1900] + "\n… (liste tronquée)"
+        text = text[:1900] + "\n… (liste tronquée)```"
     await interaction.followup.send(text)
 
 
@@ -543,6 +566,66 @@ class ArchipelagoMonitor:
 
         status = "✅" if hint["found"] else "❔"
         return f"{status} **{item_name}** (pour {receiving_name}) est à **{location_name}** chez {finding_name}"
+
+    def hints_for_slot(self, hint: dict, slot_num: int) -> bool:
+        """True si ce hint concerne un objet DESTINÉ à ce slot."""
+        return hint["receiving_player"] == slot_num
+
+    def hints_at_slot(self, hint: dict, slot_num: int) -> bool:
+        """True si ce hint concerne un objet SITUÉ dans le monde de ce slot."""
+        return hint["finding_player"] == slot_num
+
+    @staticmethod
+    def _truncate(text: str, width: int) -> str:
+        if len(text) <= width:
+            return text
+        return text[: width - 1] + "…"
+
+    def build_hints_table(self, hints: list[dict]) -> str:
+        """Formate une liste de hints en tableau texte aligné (bloc de code Discord)."""
+        if not hints:
+            return "_Aucun hint._"
+
+        col_widths = {"objet": 24, "pour": 14, "chez_loc": 22, "chez_joueur": 12, "trouve": 6}
+        rows = []
+        for h in hints:
+            if not h["found"]:
+                receiving_name = self.slot_names.get(h["receiving_player"], f"Slot#{h['receiving_player']}")
+                finding_name = self.slot_names.get(h["finding_player"], f"Slot#{h['finding_player']}")
+                receiving_game = self.config.game_for(self.server_url, receiving_name)
+                finding_game = self.config.game_for(self.server_url, finding_name)
+                item_name = self.item_id_to_name.get(receiving_game, {}).get(h["item"], f"Item#{h['item']}")
+                location_name = self.location_id_to_name.get(finding_game, {}).get(
+                    h["location"], f"Location#{h['location']}"
+                )
+                rows.append((
+                    self._truncate(item_name, col_widths["objet"]),
+                    self._truncate(receiving_name, col_widths["pour"]),
+                    self._truncate(location_name, col_widths["chez_loc"]),
+                    self._truncate(finding_name, col_widths["chez_joueur"]),
+                    "✅" if h["found"] else "❔",
+                ))
+
+        header = (
+            f"{'Objet':<{col_widths['objet']}} "
+            f"{'Pour':<{col_widths['pour']}} "
+            f"{'Emplacement':<{col_widths['chez_loc']}} "
+            f"{'Chez':<{col_widths['chez_joueur']}} "
+            f"{'Trouvé':<{col_widths['trouve']}}"
+        )
+        separator = "-" * len(header)
+        lines = [header, separator]
+        for objet, pour, loc, chez, trouve in rows:
+            lines.append(
+                f"{objet:<{col_widths['objet']}} "
+                f"{pour:<{col_widths['pour']}} "
+                f"{loc:<{col_widths['chez_loc']}} "
+                f"{chez:<{col_widths['chez_joueur']}} "
+                f"{trouve:<{col_widths['trouve']}}"
+            )
+
+        table = "\n".join(lines)
+        return f"```\n{table}\n```"
 
 
 async def archipelago_loop(server_url: str):
