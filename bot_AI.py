@@ -1,20 +1,36 @@
 """
-Bot Discord <-> Archipelago
+Bot Discord <-> Archipelago (multi-room, piloté par config)
 
 Fonctionnalités :
-  - /link <slot_name>        : lie TON compte Discord à un nom de slot AP
-  - /unlink <slot_name>      : supprime une liaison
-  - /links                   : liste les liaisons connues
-  - Écoute le serveur Archipelago en tâche de fond et, quand un slot lié
-    reçoit un item, ping le membre Discord correspondant dans un salon dédié.
+  - Notifications d'items reçus (ItemSend)
+  - Notifications de morts DeathLink (Bounced) avec compteur persistant
+  - /hints <slot_name> : liste les hints connus concernant ce joueur
+    (aussi bien les objets qu'il doit trouver pour d'autres que les
+    hints déjà posés sur ses propres objets)
+
+Toute la liaison slot <-> utilisateur Discord <-> jeu est définie dans un
+fichier rooms.json.
+
+Format de rooms.json :
+
+{
+    "wss://archipelago.gg:62811": {
+        "slot": {
+            "NomDuSlot": {
+                "user_id": 210844943609102336,
+                "game": "Nom Exact Du Jeu"
+            },
+            ...
+        },
+        "password": ""
+    }
+}
 
 Installation :
-    pip install discord.py websockets
-
-Configuration : voir la section CONFIG ci-dessous.
+    pip install discord.py websockets python-dotenv
 
 Usage :
-    python ap_discord_bot.py
+    python bot.py
 """
 
 import asyncio
@@ -31,13 +47,13 @@ from dotenv import load_dotenv
 import os
 
 load_dotenv()
+
 # ---------------------------------------------------------------------------
 # CONFIG - à adapter
 # ---------------------------------------------------------------------------
 
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_TOKEN")
 NOTIFY_CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
-
 
 ROOMS_FILE = Path("rooms.json")
 DEATHS_FILE = Path("deaths.json")
@@ -101,6 +117,15 @@ class RoomsConfig:
 
     def games_for(self, server_url: str) -> list[str]:
         return sorted({v["game"] for v in self.slots_for(server_url).values()})
+
+    def find_server_for_slot(self, slot_name: str) -> str | None:
+        """Trouve dans quelle room un slot donné (nom, insensible à la casse) est défini."""
+        target = slot_name.lower()
+        for server_url in self.server_urls():
+            for name in self.slots_for(server_url):
+                if name.lower() == target:
+                    return server_url
+        return None
 
 
 rooms_config = RoomsConfig(ROOMS_FILE)
@@ -166,6 +191,9 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 
 # gardé en mémoire pour pouvoir stopper/redémarrer les tâches de surveillance
 monitor_tasks: dict[str, asyncio.Task] = {}
+# instances actives des moniteurs, pour pouvoir leur envoyer des requêtes
+# (ex: demander les hints) depuis les commandes slash
+active_monitors: dict[str, "ArchipelagoMonitor"] = {}
 
 
 @bot.event
@@ -233,6 +261,48 @@ async def reset_deaths_cmd(interaction: discord.Interaction):
     await interaction.response.send_message("🔄 Compteur de morts remis à zéro.", ephemeral=True)
 
 
+@bot.tree.command(name="hints", description="Affiche les hints connus concernant un joueur")
+@app_commands.describe(slot_name="Le nom de slot Archipelago du joueur")
+async def hints_cmd(interaction: discord.Interaction, slot_name: str):
+    server_url = rooms_config.find_server_for_slot(slot_name)
+    if server_url is None:
+        await interaction.response.send_message(
+            f"Aucun slot **{slot_name}** trouvé dans la config.", ephemeral=True
+        )
+        return
+
+    monitor = active_monitors.get(server_url)
+    if monitor is None or not monitor.is_ready():
+        await interaction.response.send_message(
+            "La surveillance de cette room n'est pas encore prête, réessaie dans quelques secondes.",
+            ephemeral=True,
+        )
+        return
+
+    await interaction.response.defer(thinking=True)
+
+    try:
+        hints = await monitor.get_hints_for_slot(slot_name)
+    except asyncio.TimeoutError:
+        await interaction.followup.send("⏱️ Le serveur Archipelago n'a pas répondu à temps.")
+        return
+
+    if not hints:
+        await interaction.followup.send(f"Aucun hint connu pour **{slot_name}** pour l'instant.")
+        return
+
+    lines = [f"**Hints concernant {slot_name} :**"]
+    for h in hints:
+        if not h["found"]:
+            lines.append(monitor.format_hint(h))
+
+    text = "\n".join(lines)
+    # Discord limite les messages à 2000 caractères
+    if len(text) > 1900:
+        text = text[:1900] + "\n… (liste tronquée)"
+    await interaction.followup.send(text)
+
+
 async def notify_item_received(server_url: str, receiver_slot: str, item_name: str, sender_name: str):
     channel = bot.get_channel(NOTIFY_CHANNEL_ID)
     if channel is None:
@@ -268,9 +338,12 @@ async def notify_death(server_url: str, slot_name: str, cause: str | None):
 class ArchipelagoMonitor:
     """
     Se connecte à une room Archipelago avec un slot réel (le protocole AP
-    l'exige) et suit TOUS les échanges d'items de la room via les messages
-    PrintJSON de type 'ItemSend', diffusés à tous les clients connectés
-    quel que soit leur slot.
+    l'exige) et suit :
+      - les items échangés (PrintJSON / ItemSend), diffusés à tous les
+        clients connectés quel que soit leur slot
+      - les morts DeathLink (Bounced avec tag "DeathLink")
+      - les hints, via le mécanisme de stockage serveur (Get/Retrieved sur
+        la clé spéciale "_read_hints_{team}_{slot}")
     """
 
     def __init__(self, server_url: str, config: RoomsConfig):
@@ -282,10 +355,19 @@ class ArchipelagoMonitor:
         self.password = config.password_for(server_url)
 
         self.ws = None
-        # item_id_to_name est indexé par jeu, car les IDs d'items sont
-        # spécifiques à chaque jeu dans Archipelago.
+        # item_id_to_name / location_id_to_name sont indexés par jeu, car les
+        # IDs sont spécifiques à chaque jeu dans Archipelago.
         self.item_id_to_name: dict[str, dict[int, str]] = {}
-        self.slot_names: dict[int, str] = {}  # slot number -> slot name
+        self.location_id_to_name: dict[str, dict[int, str]] = {}
+        self.slot_names: dict[int, str] = {}          # slot number -> slot name
+        self.slot_numbers: dict[str, int] = {}         # slot name (lower) -> slot number
+        self.my_team: int | None = None
+
+        # requêtes Get/Retrieved en attente, indexées par clé de storage
+        self._pending: dict[str, asyncio.Future] = {}
+
+    def is_ready(self) -> bool:
+        return self.ws is not None and self.my_team is not None
 
     async def run(self):
         if not self.connect_slot_name:
@@ -301,9 +383,17 @@ class ArchipelagoMonitor:
         ) as ws:
             self.ws = ws
             log.info("[%s] Connecté au serveur Archipelago", self.server_url)
-            async for raw in ws:
-                print(raw)
-                await self.handle_packet(json.loads(raw))
+            try:
+                async for raw in ws:
+                    await self.handle_packet(json.loads(raw))
+            finally:
+                self.ws = None
+                self.my_team = None
+                # on annule les requêtes en attente si la connexion tombe
+                for fut in self._pending.values():
+                    if not fut.done():
+                        fut.cancel()
+                self._pending.clear()
 
     async def send(self, packets: list):
         await self.ws.send(json.dumps(packets))
@@ -311,12 +401,8 @@ class ArchipelagoMonitor:
     async def handle_packet(self, packets):
         for pkt in packets:
             cmd = pkt.get("cmd")
-            log.info("[%s] Paquet reçu: %s", self.server_url, cmd)
-            log.info("[%s] Tags reçu: %s", self.server_url, pkt.get("tags", []))
 
             if cmd == "RoomInfo":
-                # On demande le datapackage uniquement pour les jeux utilisés
-                # dans cette room (tels que déclarés dans rooms.json).
                 games = self.config.games_for(self.server_url)
                 await self.send([{"cmd": "GetDataPackage", "games": games}])
 
@@ -325,10 +411,15 @@ class ArchipelagoMonitor:
                     self.item_id_to_name[game_name] = {
                         v: k for k, v in game_data["item_name_to_id"].items()
                     }
+                    self.location_id_to_name[game_name] = {
+                        v: k for k, v in game_data["location_name_to_id"].items()
+                    }
                 await self.connect_monitor()
 
             elif cmd == "Connected":
+                self.my_team = pkt["team"]
                 self.slot_names = {p["slot"]: p["name"] for p in pkt["players"]}
+                self.slot_numbers = {name.lower(): num for num, name in self.slot_names.items()}
                 log.info("[%s] Surveillance active, %d joueur(s)", self.server_url, len(self.slot_names))
 
             elif cmd == "ConnectionRefused":
@@ -340,8 +431,10 @@ class ArchipelagoMonitor:
             elif cmd == "Bounced":
                 await self.handle_bounce(pkt)
 
+            elif cmd == "Retrieved":
+                self.handle_retrieved(pkt)
+
     async def handle_print_json(self, pkt):
-        print
         if pkt.get("type") != "ItemSend":
             return
         item_data = pkt.get("item", {})
@@ -359,7 +452,7 @@ class ArchipelagoMonitor:
         await notify_item_received(self.server_url, receiver_name, item_name, sender_name)
 
     async def handle_bounce(self, pkt):
-        # Les paquets DeathLink sont des Bounce avec "DeathLink" dans les
+        # Les paquets DeathLink sont des Bounced avec "DeathLink" dans les
         # tags, et contiennent data.source = nom du slot qui est mort.
         if "DeathLink" not in pkt.get("tags", []):
             return
@@ -369,6 +462,13 @@ class ArchipelagoMonitor:
         if not source:
             return
         await notify_death(self.server_url, source, cause)
+
+    def handle_retrieved(self, pkt):
+        keys = pkt.get("keys", {})
+        for key, value in keys.items():
+            fut = self._pending.pop(key, None)
+            if fut is not None and not fut.done():
+                fut.set_result(value)
 
     async def connect_monitor(self):
         await self.send([{
@@ -383,10 +483,72 @@ class ArchipelagoMonitor:
             "slot_data": False,
         }])
 
+    async def get_hints_for_slot(self, slot_name: str, timeout: float = 10.0) -> list[dict]:
+        """Récupère les hints connus impliquant ce slot (qu'il soit le
+        destinataire de l'objet ou celui qui doit le trouver), via la clé de
+        storage spéciale _read_hints_{team}_{slot}."""
+        slot_num = self.slot_numbers.get(slot_name.lower())
+        if slot_num is None or self.my_team is None:
+            return []
+
+        key = f"_read_hints_{self.my_team}_{slot_num}"
+
+        fut = self._pending.get(key)
+        if fut is None or fut.done():
+            fut = asyncio.get_event_loop().create_future()
+            self._pending[key] = fut
+            await self.send([{"cmd": "Get", "keys": [key]}])
+
+        raw_hints = await asyncio.wait_for(fut, timeout=timeout)
+        if not raw_hints:
+            return []
+
+        # Selon la version du serveur Archipelago, chaque hint arrive soit
+        # comme une liste positionnelle [receiving_player, finding_player,
+        # location, item, found, entrance, item_flags], soit déjà comme un
+        # dict avec ces mêmes clés nommées. On gère les deux formats.
+        result = []
+        for h in raw_hints:
+            if isinstance(h, dict):
+                result.append({
+                    "receiving_player": h.get("receiving_player"),
+                    "finding_player": h.get("finding_player"),
+                    "location": h.get("location"),
+                    "item": h.get("item"),
+                    "found": h.get("found"),
+                    "entrance": h.get("entrance", ""),
+                })
+            else:
+                result.append({
+                    "receiving_player": h[0],
+                    "finding_player": h[1],
+                    "location": h[2],
+                    "item": h[3],
+                    "found": h[4],
+                    "entrance": h[5] if len(h) > 5 else "",
+                })
+        return result
+
+    def format_hint(self, hint: dict) -> str:
+        receiving_name = self.slot_names.get(hint["receiving_player"], f"Slot#{hint['receiving_player']}")
+        finding_name = self.slot_names.get(hint["finding_player"], f"Slot#{hint['finding_player']}")
+
+        receiving_game = self.config.game_for(self.server_url, receiving_name)
+        finding_game = self.config.game_for(self.server_url, finding_name)
+
+        item_name = self.item_id_to_name.get(receiving_game, {}).get(hint["item"], f"Item#{hint['item']}")
+        location_name = self.location_id_to_name.get(finding_game, {}).get(
+            hint["location"], f"Location#{hint['location']}"
+        )
+
+        status = "✅" if hint["found"] else "❔"
+        return f"{status} **{item_name}** (pour {receiving_name}) est à **{location_name}** chez {finding_name}"
+
 
 async def archipelago_loop(server_url: str):
     await bot.wait_until_ready()
     monitor = ArchipelagoMonitor(server_url, rooms_config)
+    active_monitors[server_url] = monitor
     while not bot.is_closed():
         try:
             await monitor.run()
