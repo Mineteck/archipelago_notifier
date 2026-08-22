@@ -332,10 +332,7 @@ async def notify_item_received(server_url: str, receiver_slot: str, item_name: s
         log.warning("Salon de notification introuvable (ID %s)", NOTIFY_CHANNEL_ID)
         return
 
-    user_id = rooms_config.user_id_for(server_url, receiver_slot)
-    mention = f"<@{user_id}>" if user_id else f"**{receiver_slot}**"
-
-    await channel.send(f"🎁 {mention} a reçu **{item_name}** (envoyé par {sender_name})")
+    await channel.send(f"🎁 {receiver_slot} a reçu **{item_name}** (envoyé par {sender_name})")
 
 
 async def notify_death(server_url: str, slot_name: str, cause: str | None):
