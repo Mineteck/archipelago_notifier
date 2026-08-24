@@ -351,26 +351,35 @@ async def server_url_autocomplete(interaction: discord.Interaction, current: str
     ][:25]
 
 
-@bot.tree.command(name="join", description="Lie ton compte Discord à un slot d'une room déjà ajoutée à ce serveur")
+@bot.tree.command(name="join", description="Lie un compte Discord à un slot d'une room déjà ajoutée à ce serveur")
 @app_commands.describe(
     server_url="La room à rejoindre (voir /rooms ou /add_room d'abord)",
     slot_name="Ton nom de slot exact dans cette room",
     game="Le jeu tel que déclaré dans ton yaml",
+    user="Lier ce membre au lieu de toi-même (optionnel)",
 )
 @app_commands.autocomplete(server_url=server_url_autocomplete)
-async def join_cmd(interaction: discord.Interaction, server_url: str, slot_name: str, game: str):
+async def join_cmd(
+    interaction: discord.Interaction,
+    server_url: str,
+    slot_name: str,
+    game: str,
+    user: discord.Member | None = None,
+):
+    server_url = "wss://" + server_url
     if server_url not in rooms_config.rooms:
         await interaction.response.send_message(
             f"Room **{server_url}** inconnue. Utilise `/add_room` d'abord, ou vérifie `/rooms`.",
             ephemeral=True,
         )
         return
-
-    rooms_config.add_slot(server_url, slot_name, interaction.user.id, game)
+ 
+    target = user or interaction.user
+    rooms_config.add_slot(server_url, slot_name, target.id, game)
     restart_monitor(server_url)
-
+ 
     await interaction.response.send_message(
-        f"✅ Slot **{slot_name}** ({game}) lié à {interaction.user.mention} sur **{server_url}**.",
+        f"✅ Slot **{slot_name}** ({game}) lié à {target.mention} sur **{server_url}**.",
         ephemeral=True,
     )
 
@@ -380,6 +389,7 @@ async def join_cmd(interaction: discord.Interaction, server_url: str, slot_name:
 @app_commands.autocomplete(server_url=server_url_autocomplete)
 @app_commands.checks.has_permissions(manage_guild=True)
 async def set_channel_cmd(interaction: discord.Interaction, server_url: str):
+    server_url = "wss://" + server_url
     ok = rooms_config.set_channel_id(server_url, interaction.channel_id)
     if not ok:
         await interaction.response.send_message(f"Room **{server_url}** inconnue.", ephemeral=True)
