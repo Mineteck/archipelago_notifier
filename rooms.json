@@ -1,32 +1,33 @@
 {
-	"wss://archipelago.gg:62811": {
-		"slot": {
-			"Portier": {
-				"user_id": 210844943609102336,
-				"game": "Baldur's Gate 3"
-			},
-			"lincul": {
-				"user_id": 223060101915869184,
-				"game": "Twilight Princess"
-			},
-			"PeintreEnervé": {
-				"user_id": 210846477331857419,
-				"game": "A Link Between Worlds"
-			},
-			"Igiul1": {
-				"user_id": 1499168838602985602,
-				"game": "Luigi's Mansion"
-			},
-			"SalopesDesMers": {
-				"user_id": 1491516154395758634,
-				"game": "Subnautica"
-			},
-			"Xere": {
-				"user_id": 725773114189021324,
-				"game": "Super Mario Sunshine"
-			}
-		},
-		"password": ""
-		
-	}
+  "wss://archipelago.gg:62811": {
+    "slot": {
+      "Portier": {
+        "user_id": 210844943609102336,
+        "game": "Baldur's Gate 3"
+      },
+      "lincul": {
+        "user_id": 223060101915869184,
+        "game": "Twilight Princess"
+      },
+      "PeintreEnervé": {
+        "user_id": 210846477331857419,
+        "game": "A Link Between Worlds"
+      },
+      "Igiul1": {
+        "user_id": 1499168838602985602,
+        "game": "Luigi's Mansion"
+      },
+      "SalopesDesMers": {
+        "user_id": 1491516154395758634,
+        "game": "Subnautica"
+      },
+      "Xere": {
+        "user_id": 725773114189021324,
+        "game": "Super Mario Sunshine"
+      }
+    },
+    "guild_id": 1540372524502745200,
+    "channel_id": 1540373202163728395,
+    "password": ""
+  }
 }

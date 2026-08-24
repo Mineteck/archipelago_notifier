@@ -7,6 +7,9 @@ Fonctionnalités :
   - /hints <slot_name> : liste les hints connus concernant ce joueur
     (aussi bien les objets qu'il doit trouver pour d'autres que les
     hints déjà posés sur ses propres objets)
+  - /add_room : ajoute une room, liée au serveur Discord où la commande
+    est utilisée
+  - /join : lie ton compte Discord à un slot d'une room déjà ajoutée
 
 Toute la liaison slot <-> utilisateur Discord <-> jeu est définie dans un
 fichier rooms.json.
@@ -15,14 +18,15 @@ Format de rooms.json :
 
 {
     "wss://archipelago.gg:62811": {
+        "guild_id": 123456789012345678,
+        "password": "",
         "slot": {
             "NomDuSlot": {
                 "user_id": 210844943609102336,
                 "game": "Nom Exact Du Jeu"
             },
             ...
-        },
-        "password": ""
+        }
     }
 }
 
@@ -53,7 +57,6 @@ load_dotenv()
 # ---------------------------------------------------------------------------
 
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_TOKEN")
-NOTIFY_CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
 
 ROOMS_FILE = Path("rooms.json")
 DEATHS_FILE = Path("deaths.json")
@@ -67,7 +70,7 @@ log = logging.getLogger("ap-discord-bot")
 
 
 class RoomsConfig:
-    """Charge et recharge rooms.json à la demande."""
+    """Charge, recharge et modifie rooms.json à la demande."""
 
     def __init__(self, path: Path):
         self.path = path
@@ -91,6 +94,9 @@ class RoomsConfig:
             self.rooms = {}
             return
         log.info("Config chargée : %d room(s)", len(self.rooms))
+
+    def save(self):
+        self.path.write_text(json.dumps(self.rooms, indent=2, ensure_ascii=False), encoding="utf-8")
 
     def server_urls(self) -> list[str]:
         return list(self.rooms.keys())
@@ -126,6 +132,43 @@ class RoomsConfig:
                 if name.lower() == target:
                     return server_url
         return None
+
+    def guild_id_for(self, server_url: str) -> int | None:
+        return self.rooms.get(server_url, {}).get("guild_id")
+
+    def channel_id_for(self, server_url: str) -> int | None:
+        return self.rooms.get(server_url, {}).get("channel_id")
+
+    def set_channel_id(self, server_url: str, channel_id: int) -> bool:
+        if server_url not in self.rooms:
+            return False
+        self.rooms[server_url]["channel_id"] = channel_id
+        self.save()
+        return True
+
+    def rooms_for_guild(self, guild_id: int | None) -> list[str]:
+        return [url for url, data in self.rooms.items() if data.get("guild_id") == guild_id]
+
+    def add_room(self, server_url: str, password: str, guild_id: int, channel_id: int) -> bool:
+        """Ajoute une nouvelle room vide. Retourne False si elle existe déjà."""
+        if server_url in self.rooms:
+            return False
+        self.rooms[server_url] = {
+            "guild_id": guild_id,
+            "channel_id": channel_id,
+            "password": password,
+            "slot": {},
+        }
+        self.save()
+        return True
+
+    def add_slot(self, server_url: str, slot_name: str, user_id: int, game: str) -> bool:
+        """Ajoute ou met à jour un slot dans une room existante."""
+        if server_url not in self.rooms:
+            return False
+        self.rooms[server_url].setdefault("slot", {})[slot_name] = {"user_id": user_id, "game": game}
+        self.save()
+        return True
 
 
 rooms_config = RoomsConfig(ROOMS_FILE)
@@ -210,6 +253,18 @@ def start_all_monitors():
         monitor_tasks[server_url] = bot.loop.create_task(archipelago_loop(server_url))
 
 
+def restart_monitor(server_url: str):
+    """Arrête (si besoin) puis relance la tâche de surveillance d'une room.
+    Utile après /add_room ou /join car ArchipelagoMonitor fige son slot de
+    connexion à sa création : il faut recréer l'instance pour qu'elle
+    reprenne en compte les nouveaux slots ajoutés dans rooms.json."""
+    task = monitor_tasks.get(server_url)
+    if task and not task.done():
+        task.cancel()
+    active_monitors.pop(server_url, None)
+    monitor_tasks[server_url] = bot.loop.create_task(archipelago_loop(server_url))
+
+
 @bot.tree.command(name="reload_rooms", description="Recharge rooms.json et (re)démarre les surveillances manquantes")
 async def reload_rooms_cmd(interaction: discord.Interaction):
     rooms_config.load()
@@ -228,10 +283,111 @@ async def rooms_cmd(interaction: discord.Interaction):
 
     lines = []
     for server_url in rooms_config.server_urls():
-        lines.append(f"**{server_url}**")
+        channel_id = rooms_config.channel_id_for(server_url)
+        channel_txt = f" — notifs dans <#{channel_id}>" if channel_id else " — notifs dans le salon par défaut"
+        lines.append(f"**{server_url}**{channel_txt}")
         for slot_name, info in rooms_config.slots_for(server_url).items():
             lines.append(f"  • {slot_name} ({info.get('game')}) → <@{info.get('user_id')}>")
     await interaction.response.send_message("\n".join(lines), ephemeral=True)
+
+
+@bot.tree.command(name="add_room", description="Ajoute une room Archipelago (avec au moins un slot), liée à ce serveur Discord")
+@app_commands.describe(
+    server_url="Adresse WebSocket de la room, ex: wss://archipelago.gg:12345",
+    slot_name="Ton nom de slot exact dans cette room (le premier joueur lié)",
+    game="Le jeu tel que déclaré dans ton yaml",
+    password="Mot de passe de la room (laisse vide si aucun)",
+)
+@app_commands.checks.has_permissions(manage_guild=True)
+async def add_room_cmd(
+    interaction: discord.Interaction,
+    server_url: str,
+    slot_name: str,
+    game: str,
+    password: str = "",
+):
+    server_url = "wss://" + server_url
+    if interaction.guild_id is None:
+        await interaction.response.send_message(
+            "Cette commande doit être utilisée depuis un serveur Discord.", ephemeral=True
+        )
+        return
+
+    added = rooms_config.add_room(server_url, password, interaction.guild_id, interaction.channel_id)
+    if not added:
+        await interaction.response.send_message(
+            f"⚠️ La room **{server_url}** est déjà enregistrée. Utilise `/join` pour t'y lier.",
+            ephemeral=True,
+        )
+        return
+
+    rooms_config.add_slot(server_url, slot_name, interaction.user.id, game)
+    restart_monitor(server_url)
+
+    await interaction.response.send_message(
+        f"✅ Room **{server_url}** ajoutée et liée à ce serveur Discord, avec "
+        f"le slot **{slot_name}** ({game}) → {interaction.user.mention}.\n"
+        f"Les notifications seront envoyées dans {interaction.channel.mention}.\n"
+        f"Les autres joueurs peuvent maintenant utiliser `/join` pour s'y lier.",
+        ephemeral=True,
+    )
+
+
+@add_room_cmd.error
+async def add_room_cmd_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
+    if isinstance(error, app_commands.MissingPermissions):
+        await interaction.response.send_message(
+            "Il faut la permission **Gérer le serveur** pour ajouter une room.", ephemeral=True
+        )
+    else:
+        raise error
+
+
+async def server_url_autocomplete(interaction: discord.Interaction, current: str):
+    urls = rooms_config.rooms_for_guild(interaction.guild_id)
+    return [
+        app_commands.Choice(name=u, value=u)
+        for u in urls if current.lower() in u.lower()
+    ][:25]
+
+
+@bot.tree.command(name="join", description="Lie ton compte Discord à un slot d'une room déjà ajoutée à ce serveur")
+@app_commands.describe(
+    server_url="La room à rejoindre (voir /rooms ou /add_room d'abord)",
+    slot_name="Ton nom de slot exact dans cette room",
+    game="Le jeu tel que déclaré dans ton yaml",
+)
+@app_commands.autocomplete(server_url=server_url_autocomplete)
+async def join_cmd(interaction: discord.Interaction, server_url: str, slot_name: str, game: str):
+    if server_url not in rooms_config.rooms:
+        await interaction.response.send_message(
+            f"Room **{server_url}** inconnue. Utilise `/add_room` d'abord, ou vérifie `/rooms`.",
+            ephemeral=True,
+        )
+        return
+
+    rooms_config.add_slot(server_url, slot_name, interaction.user.id, game)
+    restart_monitor(server_url)
+
+    await interaction.response.send_message(
+        f"✅ Slot **{slot_name}** ({game}) lié à {interaction.user.mention} sur **{server_url}**.",
+        ephemeral=True,
+    )
+
+
+@bot.tree.command(name="set_channel", description="Change le salon de notifications d'une room vers le salon courant")
+@app_commands.describe(server_url="La room à modifier (voir /rooms)")
+@app_commands.autocomplete(server_url=server_url_autocomplete)
+@app_commands.checks.has_permissions(manage_guild=True)
+async def set_channel_cmd(interaction: discord.Interaction, server_url: str):
+    ok = rooms_config.set_channel_id(server_url, interaction.channel_id)
+    if not ok:
+        await interaction.response.send_message(f"Room **{server_url}** inconnue.", ephemeral=True)
+        return
+    await interaction.response.send_message(
+        f"✅ Les notifications de **{server_url}** seront désormais envoyées dans {interaction.channel.mention}.",
+        ephemeral=True,
+    )
 
 
 @bot.tree.command(name="deaths", description="Affiche le compteur de morts DeathLink")
@@ -327,18 +483,20 @@ async def _send_hints(interaction: discord.Interaction, slot_name: str, filter_m
 
 
 async def notify_item_received(server_url: str, receiver_slot: str, item_name: str, sender_name: str):
-    channel = bot.get_channel(NOTIFY_CHANNEL_ID)
+    channel_id = rooms_config.channel_id_for(server_url)
+    channel = bot.get_channel(channel_id)
     if channel is None:
-        log.warning("Salon de notification introuvable (ID %s)", NOTIFY_CHANNEL_ID)
+        log.warning("Salon de notification introuvable (ID %s)", channel_id)
         return
 
     await channel.send(f"🎁 {receiver_slot} a reçu **{item_name}** (envoyé par {sender_name})")
 
 
 async def notify_death(server_url: str, slot_name: str, cause: str | None):
-    channel = bot.get_channel(NOTIFY_CHANNEL_ID)
+    channel_id = rooms_config.channel_id_for(server_url)
+    channel = bot.get_channel(channel_id)
     if channel is None:
-        log.warning("Salon de notification introuvable (ID %s)", NOTIFY_CHANNEL_ID)
+        log.warning("Salon de notification introuvable (ID %s)", channel_id)
         return
 
     user_id = rooms_config.user_id_for(server_url, slot_name)
@@ -523,10 +681,6 @@ class ArchipelagoMonitor:
         if not raw_hints:
             return []
 
-        # Selon la version du serveur Archipelago, chaque hint arrive soit
-        # comme une liste positionnelle [receiving_player, finding_player,
-        # location, item, found, entrance, item_flags], soit déjà comme un
-        # dict avec ces mêmes clés nommées. On gère les deux formats.
         result = []
         for h in raw_hints:
             if isinstance(h, dict):
@@ -565,11 +719,9 @@ class ArchipelagoMonitor:
         return f"{status} **{item_name}** (pour {receiving_name}) est à **{location_name}** chez {finding_name}"
 
     def hints_for_slot(self, hint: dict, slot_num: int) -> bool:
-        """True si ce hint concerne un objet DESTINÉ à ce slot."""
         return hint["receiving_player"] == slot_num
 
     def hints_at_slot(self, hint: dict, slot_num: int) -> bool:
-        """True si ce hint concerne un objet SITUÉ dans le monde de ce slot."""
         return hint["finding_player"] == slot_num
 
     @staticmethod
@@ -579,7 +731,6 @@ class ArchipelagoMonitor:
         return text[: width - 1] + "…"
 
     def build_hints_table(self, hints: list[dict]) -> str:
-        """Formate une liste de hints en tableau texte aligné (bloc de code Discord)."""
         if not hints:
             return "_Aucun hint._"
 
