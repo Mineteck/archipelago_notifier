@@ -2,28 +2,33 @@
 Bot Discord <-> Archipelago (multi-room, piloté par config)
 
 Fonctionnalités :
-  - Notifications d'items reçus (ItemSend)
+  - Notifications d'items reçus (ItemSend), coupées pour un slot une fois
+    qu'il a terminé son objectif (Goal)
   - Notifications de morts DeathLink (Bounced) avec compteur persistant
+  - Notification de victoire (Goal) et résumé groupé des Release/Collect
   - /hints <slot_name> : liste les hints connus concernant ce joueur
-    (aussi bien les objets qu'il doit trouver pour d'autres que les
-    hints déjà posés sur ses propres objets)
   - /add_room : ajoute une room, liée au serveur Discord où la commande
     est utilisée
-  - /join : lie ton compte Discord à un slot d'une room déjà ajoutée
+  - /join : lie un compte Discord à un slot d'une room déjà ajoutée
+  - /set_channel : change le salon de notifications d'une room
 
-Toute la liaison slot <-> utilisateur Discord <-> jeu est définie dans un
-fichier rooms.json.
+Tout est stocké dans un seul fichier rooms.json. Chaque slot porte
+directement son compteur de morts (death) et son statut de victoire
+(finish).
 
 Format de rooms.json :
 
 {
     "wss://archipelago.gg:62811": {
         "guild_id": 123456789012345678,
+        "channel_id": 987654321098765432,
         "password": "",
         "slot": {
-            "NomDuSlot": {
+            "Portier": {
                 "user_id": 210844943609102336,
-                "game": "Nom Exact Du Jeu"
+                "game": "Baldur's Gate 3",
+                "death": 0,
+                "finish": 0
             },
             ...
         }
@@ -59,13 +64,12 @@ load_dotenv()
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_TOKEN")
 
 ROOMS_FILE = Path("rooms.json")
-DEATHS_FILE = Path("deaths.json")
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger("ap-discord-bot")
 
 # ---------------------------------------------------------------------------
-# Config des rooms
+# Config des rooms (rooms, slots, morts et victoires — tout au même endroit)
 # ---------------------------------------------------------------------------
 
 
@@ -116,8 +120,6 @@ class RoomsConfig:
         return entry.get("game") if entry else None
 
     def any_slot_name(self, server_url: str) -> str | None:
-        """Un nom de slot quelconque pour cette room, utilisé pour la connexion
-        de surveillance (le protocole AP exige un slot réel pour se connecter)."""
         slots = self.slots_for(server_url)
         return next(iter(slots), None)
 
@@ -125,12 +127,19 @@ class RoomsConfig:
         return sorted({v["game"] for v in self.slots_for(server_url).values()})
 
     def find_server_for_slot(self, slot_name: str) -> str | None:
-        """Trouve dans quelle room un slot donné (nom, insensible à la casse) est défini."""
         target = slot_name.lower()
         for server_url in self.server_urls():
             for name in self.slots_for(server_url):
                 if name.lower() == target:
                     return server_url
+        return None
+
+    def _find_slot_key(self, server_url: str, slot_name: str) -> str | None:
+        """Retrouve la clé exacte (casse d'origine) d'un slot, insensible à la casse."""
+        target = slot_name.lower()
+        for name in self.slots_for(server_url):
+            if name.lower() == target:
+                return name
         return None
 
     def guild_id_for(self, server_url: str) -> int | None:
@@ -150,7 +159,6 @@ class RoomsConfig:
         return [url for url, data in self.rooms.items() if data.get("guild_id") == guild_id]
 
     def add_room(self, server_url: str, password: str, guild_id: int, channel_id: int) -> bool:
-        """Ajoute une nouvelle room vide. Retourne False si elle existe déjà."""
         if server_url in self.rooms:
             return False
         self.rooms[server_url] = {
@@ -163,67 +171,69 @@ class RoomsConfig:
         return True
 
     def add_slot(self, server_url: str, slot_name: str, user_id: int, game: str) -> bool:
-        """Ajoute ou met à jour un slot dans une room existante."""
+        """Ajoute ou met à jour un slot. Préserve death/finish si le slot
+        existait déjà (rejoindre ne doit pas remettre les compteurs à zéro)."""
         if server_url not in self.rooms:
             return False
-        self.rooms[server_url].setdefault("slot", {})[slot_name] = {"user_id": user_id, "game": game}
+        slots = self.rooms[server_url].setdefault("slot", {})
+        key = self._find_slot_key(server_url, slot_name) or slot_name
+        existing = slots.get(key, {})
+        slots[key] = {
+            "user_id": user_id,
+            "game": game,
+            "death": existing.get("death", 0),
+            "finish": existing.get("finish", 0),
+        }
         self.save()
         return True
 
+    # -- Victoire (Goal) --------------------------------------------------
+
+    def is_finished(self, server_url: str, slot_name: str) -> bool:
+        key = self._find_slot_key(server_url, slot_name)
+        if key is None:
+            return False
+        return bool(self.rooms[server_url]["slot"][key].get("finish", 0))
+
+    def mark_finished(self, server_url: str, slot_name: str):
+        key = self._find_slot_key(server_url, slot_name)
+        if key is None:
+            return
+        self.rooms[server_url]["slot"][key]["finish"] = 1
+        self.save()
+
+    # -- Compteur de morts DeathLink --------------------------------------
+
+    def death_count_for(self, server_url: str, slot_name: str) -> int:
+        key = self._find_slot_key(server_url, slot_name)
+        if key is None:
+            return 0
+        return self.rooms[server_url]["slot"][key].get("death", 0)
+
+    def increment_death(self, server_url: str, slot_name: str) -> int:
+        key = self._find_slot_key(server_url, slot_name)
+        if key is None:
+            return 0
+        slot = self.rooms[server_url]["slot"][key]
+        slot["death"] = slot.get("death", 0) + 1
+        self.save()
+        return slot["death"]
+
+    def total_deaths_for_room(self, server_url: str) -> int:
+        return sum(v.get("death", 0) for v in self.slots_for(server_url).values())
+
+    def total_deaths_all(self) -> int:
+        return sum(self.total_deaths_for_room(u) for u in self.server_urls())
+
+    def reset_deaths(self, server_url: str | None = None):
+        targets = [server_url] if server_url else self.server_urls()
+        for url in targets:
+            for slot in self.rooms.get(url, {}).get("slot", {}).values():
+                slot["death"] = 0
+        self.save()
+
 
 rooms_config = RoomsConfig(ROOMS_FILE)
-
-
-class DeathCounter:
-    """Compteur de morts DeathLink, persisté sur disque.
-
-    Structure interne : {server_url: {slot_name: count}}
-    """
-
-    def __init__(self, path: Path):
-        self.path = path
-        self.data: dict[str, dict[str, int]] = {}
-        self.load()
-
-    def load(self):
-        if self.path.exists():
-            text = self.path.read_text(encoding="utf-8").strip()
-            if text:
-                try:
-                    self.data = json.loads(text)
-                except json.JSONDecodeError as e:
-                    log.error("%s est corrompu (%s), on repart d'un compteur vide.", self.path, e)
-                    self.data = {}
-            else:
-                self.data = {}
-
-    def save(self):
-        self.path.write_text(json.dumps(self.data, indent=2, ensure_ascii=False), encoding="utf-8")
-
-    def increment(self, server_url: str, slot_name: str) -> int:
-        room = self.data.setdefault(server_url, {})
-        room[slot_name] = room.get(slot_name, 0) + 1
-        self.save()
-        return room[slot_name]
-
-    def total_for_room(self, server_url: str) -> int:
-        return sum(self.data.get(server_url, {}).values())
-
-    def total_all(self) -> int:
-        return sum(sum(room.values()) for room in self.data.values())
-
-    def counts_for_room(self, server_url: str) -> dict[str, int]:
-        return self.data.get(server_url, {})
-
-    def reset(self, server_url: str | None = None):
-        if server_url is None:
-            self.data = {}
-        else:
-            self.data.pop(server_url, None)
-        self.save()
-
-
-death_counter = DeathCounter(DEATHS_FILE)
 
 # ---------------------------------------------------------------------------
 # Bot Discord
@@ -232,10 +242,7 @@ death_counter = DeathCounter(DEATHS_FILE)
 intents = discord.Intents.default()
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# gardé en mémoire pour pouvoir stopper/redémarrer les tâches de surveillance
 monitor_tasks: dict[str, asyncio.Task] = {}
-# instances actives des moniteurs, pour pouvoir leur envoyer des requêtes
-# (ex: demander les hints) depuis les commandes slash
 active_monitors: dict[str, "ArchipelagoMonitor"] = {}
 
 
@@ -254,10 +261,7 @@ def start_all_monitors():
 
 
 def restart_monitor(server_url: str):
-    """Arrête (si besoin) puis relance la tâche de surveillance d'une room.
-    Utile après /add_room ou /join car ArchipelagoMonitor fige son slot de
-    connexion à sa création : il faut recréer l'instance pour qu'elle
-    reprenne en compte les nouveaux slots ajoutés dans rooms.json."""
+    """Arrête (si besoin) puis relance la tâche de surveillance d'une room."""
     task = monitor_tasks.get(server_url)
     if task and not task.done():
         task.cancel()
@@ -287,13 +291,17 @@ async def rooms_cmd(interaction: discord.Interaction):
         channel_txt = f" — notifs dans <#{channel_id}>" if channel_id else " — notifs dans le salon par défaut"
         lines.append(f"**{server_url}**{channel_txt}")
         for slot_name, info in rooms_config.slots_for(server_url).items():
-            lines.append(f"  • {slot_name} ({info.get('game')}) → <@{info.get('user_id')}>")
+            finished_txt = " 🏆" if info.get("finish") else ""
+            lines.append(
+                f"  • {slot_name} ({info.get('game')}) → <@{info.get('user_id')}>"
+                f" — 💀 {info.get('death', 0)}{finished_txt}"
+            )
     await interaction.response.send_message("\n".join(lines), ephemeral=True)
 
 
 @bot.tree.command(name="add_room", description="Ajoute une room Archipelago (avec au moins un slot), liée à ce serveur Discord")
 @app_commands.describe(
-    server_url="Adresse WebSocket de la room, ex: wss://archipelago.gg:12345",
+    server_url="Adresse de la room, ex: archipelago.gg:12345 (le préfixe wss:// est ajouté automatiquement)",
     slot_name="Ton nom de slot exact dans cette room (le premier joueur lié)",
     game="Le jeu tel que déclaré dans ton yaml",
     password="Mot de passe de la room (laisse vide si aucun)",
@@ -306,7 +314,9 @@ async def add_room_cmd(
     game: str,
     password: str = "",
 ):
-    server_url = "wss://" + server_url
+    if not server_url.startswith("wss://") and not server_url.startswith("ws://"):
+        server_url = "wss://" + server_url
+
     if interaction.guild_id is None:
         await interaction.response.send_message(
             "Cette commande doit être utilisée depuis un serveur Discord.", ephemeral=True
@@ -366,18 +376,20 @@ async def join_cmd(
     game: str,
     user: discord.Member | None = None,
 ):
-    server_url = "wss://" + server_url
+    if not server_url.startswith("wss://") and not server_url.startswith("ws://"):
+        server_url = "wss://" + server_url
+
     if server_url not in rooms_config.rooms:
         await interaction.response.send_message(
             f"Room **{server_url}** inconnue. Utilise `/add_room` d'abord, ou vérifie `/rooms`.",
             ephemeral=True,
         )
         return
- 
+
     target = user or interaction.user
     rooms_config.add_slot(server_url, slot_name, target.id, game)
     restart_monitor(server_url)
- 
+
     await interaction.response.send_message(
         f"✅ Slot **{slot_name}** ({game}) lié à {target.mention} sur **{server_url}**.",
         ephemeral=True,
@@ -389,7 +401,9 @@ async def join_cmd(
 @app_commands.autocomplete(server_url=server_url_autocomplete)
 @app_commands.checks.has_permissions(manage_guild=True)
 async def set_channel_cmd(interaction: discord.Interaction, server_url: str):
-    server_url = "wss://" + server_url
+    if not server_url.startswith("wss://") and not server_url.startswith("ws://"):
+        server_url = "wss://" + server_url
+
     ok = rooms_config.set_channel_id(server_url, interaction.channel_id)
     if not ok:
         await interaction.response.send_message(f"Room **{server_url}** inconnue.", ephemeral=True)
@@ -408,22 +422,23 @@ async def deaths_cmd(interaction: discord.Interaction):
 
     lines = []
     for server_url in rooms_config.server_urls():
-        counts = death_counter.counts_for_room(server_url)
-        room_total = death_counter.total_for_room(server_url)
+        counts = {name: info.get("death", 0) for name, info in rooms_config.slots_for(server_url).items()}
+        room_total = rooms_config.total_deaths_for_room(server_url)
         lines.append(f"**{server_url}** — {room_total} mort(s) au total")
-        if counts:
+        if any(counts.values()):
             for slot_name, count in sorted(counts.items(), key=lambda kv: -kv[1]):
-                lines.append(f"  💀 {slot_name} : {count}")
+                if count:
+                    lines.append(f"  💀 {slot_name} : {count}")
         else:
             lines.append("  _Aucune mort enregistrée pour l'instant_")
 
-    lines.append(f"\n**Total général : {death_counter.total_all()} mort(s)**")
+    lines.append(f"\n**Total général : {rooms_config.total_deaths_all()} mort(s)**")
     await interaction.response.send_message("\n".join(lines))
 
 
 @bot.tree.command(name="reset_deaths", description="Remet à zéro le compteur de morts DeathLink")
 async def reset_deaths_cmd(interaction: discord.Interaction):
-    death_counter.reset()
+    rooms_config.reset_deaths()
     await interaction.response.send_message("🔄 Compteur de morts remis à zéro.", ephemeral=True)
 
 
@@ -512,10 +527,32 @@ async def notify_death(server_url: str, slot_name: str, cause: str | None):
     user_id = rooms_config.user_id_for(server_url, slot_name)
     mention = f"<@{user_id}>" if user_id else f"**{slot_name}**"
 
-    new_count = death_counter.increment(server_url, slot_name)
+    new_count = rooms_config.increment_death(server_url, slot_name)
     cause_txt = f" ({cause})" if cause else ""
 
     await channel.send(f"💀 {mention} est mort{cause_txt} — **{new_count}** mort(s) au compteur")
+
+
+async def notify_goal(server_url: str, slot_name: str):
+    channel_id = rooms_config.channel_id_for(server_url)
+    channel = bot.get_channel(channel_id)
+    if channel is None:
+        log.warning("Salon de notification introuvable (ID %s)", channel_id)
+        return
+
+    user_id = rooms_config.user_id_for(server_url, slot_name)
+    mention = f"<@{user_id}>" if user_id else f"**{slot_name}**"
+    await channel.send(f"🏆 {mention} a terminé son objectif !")
+
+
+async def notify_bulk_release(server_url: str, slot_name: str, action: str):
+    channel_id = rooms_config.channel_id_for(server_url)
+    channel = bot.get_channel(channel_id)
+    if channel is None:
+        log.warning("Salon de notification introuvable (ID %s)", channel_id)
+        return
+
+    await channel.send(f"📦 **{slot_name}** a {action} tous ses items restants d'un coup.")
 
 
 # ---------------------------------------------------------------------------
@@ -528,8 +565,13 @@ class ArchipelagoMonitor:
     Se connecte à une room Archipelago avec un slot réel (le protocole AP
     l'exige) et suit :
       - les items échangés (PrintJSON / ItemSend), diffusés à tous les
-        clients connectés quel que soit leur slot
-      - les morts DeathLink (Bounced avec tag "DeathLink")
+        clients connectés quel que soit leur slot — coupés pour un
+        destinataire une fois que celui-ci a atteint son Goal
+      - les victoires (PrintJSON / Goal), persistées dans rooms.json
+        (champ "finish" du slot)
+      - les release/collect groupés (PrintJSON / Release, Collect)
+      - les morts DeathLink (Bounced avec tag "DeathLink"), persistées
+        dans rooms.json (champ "death" du slot)
       - les hints, via le mécanisme de stockage serveur (Get/Retrieved sur
         la clé spéciale "_read_hints_{team}_{slot}")
     """
@@ -543,15 +585,16 @@ class ArchipelagoMonitor:
         self.password = config.password_for(server_url)
 
         self.ws = None
-        # item_id_to_name / location_id_to_name sont indexés par jeu, car les
-        # IDs sont spécifiques à chaque jeu dans Archipelago.
         self.item_id_to_name: dict[str, dict[int, str]] = {}
         self.location_id_to_name: dict[str, dict[int, str]] = {}
-        self.slot_names: dict[int, str] = {}          # slot number -> slot name
-        self.slot_numbers: dict[str, int] = {}         # slot name (lower) -> slot number
+        self.slot_names: dict[int, str] = {}
+        self.slot_numbers: dict[str, int] = {}
         self.my_team: int | None = None
 
-        # requêtes Get/Retrieved en attente, indexées par clé de storage
+        # numéros de slot ayant déjà atteint leur Goal, reconstruit depuis
+        # rooms.json à chaque connexion (une fois qu'on connaît slot_numbers)
+        self.finished_slot_nums: set[int] = set()
+
         self._pending: dict[str, asyncio.Future] = {}
 
     def is_ready(self) -> bool:
@@ -577,7 +620,6 @@ class ArchipelagoMonitor:
             finally:
                 self.ws = None
                 self.my_team = None
-                # on annule les requêtes en attente si la connexion tombe
                 for fut in self._pending.values():
                     if not fut.done():
                         fut.cancel()
@@ -608,6 +650,12 @@ class ArchipelagoMonitor:
                 self.my_team = pkt["team"]
                 self.slot_names = {p["slot"]: p["name"] for p in pkt["players"]}
                 self.slot_numbers = {name.lower(): num for num, name in self.slot_names.items()}
+                # Reconstruit l'ensemble des slots déjà terminés à partir de
+                # rooms.json, maintenant qu'on a la correspondance nom<->numéro.
+                self.finished_slot_nums = {
+                    num for name, num in self.slot_numbers.items()
+                    if self.config.is_finished(self.server_url, name)
+                }
                 log.info("[%s] Surveillance active, %d joueur(s)", self.server_url, len(self.slot_names))
 
             elif cmd == "ConnectionRefused":
@@ -623,25 +671,58 @@ class ArchipelagoMonitor:
                 self.handle_retrieved(pkt)
 
     async def handle_print_json(self, pkt):
-        if pkt.get("type") != "ItemSend":
+        pkt_type = pkt.get("type")
+
+        if pkt_type in ("Release", "Collect", "Goal"):
+            await self.handle_goal(pkt)
             return
+
+        #if pkt_type in ("Release", "Collect"):
+        #    await self.handle_bulk_release(pkt)
+        #    return
+
+        if pkt_type != "ItemSend":
+            return
+
         item_data = pkt.get("item", {})
         receiving_slot = pkt.get("receiving")
         sender_slot = item_data.get("player")
 
+        # Un joueur qui a déjà terminé son objectif ne doit plus générer de
+        # notification d'item reçu (typiquement les rafales post-Goal /
+        # post-Release).
+        if receiving_slot in self.finished_slot_nums:
+            return
+
         receiver_name = self.slot_names.get(receiving_slot, f"Slot#{receiving_slot}")
         sender_name = self.slot_names.get(sender_slot, f"Slot#{sender_slot}")
 
-        # Le namespace de l'item ID dépend du jeu du DESTINATAIRE
         receiver_game = self.config.game_for(self.server_url, receiver_name)
         game_items = self.item_id_to_name.get(receiver_game, {})
         item_name = game_items.get(item_data.get("item"), f"Item#{item_data.get('item')}")
 
         await notify_item_received(self.server_url, receiver_name, item_name, sender_name)
 
+    async def handle_goal(self, pkt):
+        slot_num = pkt.get("slot")
+        slot_name = self.slot_names.get(slot_num, f"Slot#{slot_num}")
+        if slot_num is not None:
+            self.finished_slot_nums.add(slot_num)
+            self.config.mark_finished(self.server_url, slot_name)
+        await notify_goal(self.server_url, slot_name)
+
+    async def handle_bulk_release(self, pkt):
+        data = pkt.get("data", [])
+        slot_num = None
+        for part in data:
+            if isinstance(part, dict) and part.get("type") == "player_id":
+                slot_num = part.get("text")
+                break
+        slot_name = self.slot_names.get(int(slot_num), f"Slot#{slot_num}") if slot_num else "Un joueur"
+        action = "relâché" if pkt.get("type") == "Release" else "récupéré"
+        await notify_bulk_release(self.server_url, slot_name, action)
+
     async def handle_bounce(self, pkt):
-        # Les paquets DeathLink sont des Bounced avec "DeathLink" dans les
-        # tags, et contiennent data.source = nom du slot qui est mort.
         if "DeathLink" not in pkt.get("tags", []):
             return
         data = pkt.get("data", {})
@@ -672,9 +753,6 @@ class ArchipelagoMonitor:
         }])
 
     async def get_hints_for_slot(self, slot_name: str, timeout: float = 10.0) -> list[dict]:
-        """Récupère les hints connus impliquant ce slot (qu'il soit le
-        destinataire de l'objet ou celui qui doit le trouver), via la clé de
-        storage spéciale _read_hints_{team}_{slot}."""
         slot_num = self.slot_numbers.get(slot_name.lower())
         if slot_num is None or self.my_team is None:
             return []
