@@ -195,6 +195,17 @@ class RoomsConfig:
             return False
         return bool(self.rooms[server_url]["slot"][key].get("finish", 0))
 
+    def all_finished(self, server_url: str) -> bool:
+        slots = self.slots_for(server_url)
+
+        if not slots:
+            return False
+
+        return all(
+            info.get("finish", 0)
+            for info in slots.values()
+        )
+
     def mark_finished(self, server_url: str, slot_name: str):
         key = self._find_slot_key(server_url, slot_name)
         if key is None:
@@ -706,10 +717,29 @@ class ArchipelagoMonitor:
     async def handle_goal(self, pkt):
         slot_num = pkt.get("slot")
         slot_name = self.slot_names.get(slot_num, f"Slot#{slot_num}")
-        if slot_num is not None:
-            self.finished_slot_nums.add(slot_num)
-            self.config.mark_finished(self.server_url, slot_name)
+
+        if slot_num is None:
+            return
+
+        # Évite de traiter deux fois le même Goal
+        if slot_num in self.finished_slot_nums:
+            return
+
+        self.finished_slot_nums.add(slot_num)
+        self.config.mark_finished(self.server_url, slot_name)
+
         await notify_goal(self.server_url, slot_name)
+
+        # Tout le monde a terminé
+        if self.config.all_finished(self.server_url):
+            log.info(
+                "[%s] Tous les joueurs ont terminé, arrêt de la surveillance.",
+                self.server_url
+            )
+
+        # On ferme proprement la connexion WebSocket.
+        if self.ws is not None:
+            await self.ws.close()
 
     async def handle_bulk_release(self, pkt):
         data = pkt.get("data", [])
@@ -866,14 +896,51 @@ class ArchipelagoMonitor:
 
 async def archipelago_loop(server_url: str):
     await bot.wait_until_ready()
+
+    # Si la room était déjà terminée avant le démarrage du bot,
+    # on ne lance même pas la surveillance.
+    if rooms_config.all_finished(server_url):
+        log.info(
+            "[%s] Tous les joueurs ont déjà terminé, surveillance désactivée.",
+            server_url
+        )
+        return
+
     monitor = ArchipelagoMonitor(server_url, rooms_config)
     active_monitors[server_url] = monitor
+
     while not bot.is_closed():
+
+        # Vérifie avant chaque nouvelle connexion
+        if rooms_config.all_finished(server_url):
+            log.info(
+                "[%s] Tous les joueurs ont terminé, arrêt de la surveillance.",
+                server_url
+            )
+            break
+
         try:
             await monitor.run()
+
         except (websockets.ConnectionClosed, OSError) as e:
-            log.warning("[%s] Connexion perdue (%s), nouvelle tentative dans 10s...", server_url, e)
+
+            # La room peut avoir été terminée pendant monitor.run()
+            if rooms_config.all_finished(server_url):
+                log.info(
+                    "[%s] Tous les joueurs ont terminé, arrêt de la surveillance.",
+                    server_url
+                )
+                break
+
+            log.warning(
+                "[%s] Connexion perdue (%s), nouvelle tentative dans 10s...",
+                server_url,
+                e
+            )
+
             await asyncio.sleep(10)
+
+    active_monitors.pop(server_url, None)
 
 
 if __name__ == "__main__":
