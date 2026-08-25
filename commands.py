@@ -262,3 +262,4 @@ async def finish_room_cmd(
         f"✅ La room **{server_url}** a été arrêtée.",
         ephemeral=True,
     )
+
