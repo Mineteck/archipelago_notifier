@@ -133,7 +133,7 @@ class RoomsConfig:
 			"game": game,
 			"death": existing.get("death", 0),
 			"finish": existing.get("finish", 0),
-			"todos": {},
+			"todos": [],
 		}
 		self.save()
 		return True
