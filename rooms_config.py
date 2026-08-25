@@ -137,7 +137,38 @@ class RoomsConfig:
 		}
 		self.save()
 		return True
+	
+	def add_todo(
+		self,
+		server_url: str,
+		slot_name: str,
+		item_name: str,
+	) -> bool:
+		key = self._find_slot_key(server_url, slot_name)
 
+		if key is None:
+			return False
+
+		slot = self.rooms[server_url]["slot"][key]
+
+		todo = slot.setdefault("todos", [])
+
+		if item_name in todo:
+			return False
+
+		todo.append(item_name)
+		self.save()
+
+		return True
+
+	def todo_for(self, server_url: str, slot_name: str) -> list[str]:
+		key = self._find_slot_key(server_url, slot_name)
+
+		if key is None:
+			return []
+
+		return self.rooms[server_url]["slot"][key].get("todos", [])
+	
 	# -- Victoire (Goal) --------------------------------------------------
 
 	def all_finished(self, server_url: str) -> bool:

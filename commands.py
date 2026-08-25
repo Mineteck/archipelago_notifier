@@ -263,3 +263,78 @@ async def finish_room_cmd(
         ephemeral=True,
     )
 
+@bot.tree.command(
+    name="todo_add",
+    description="Ajoute un item à la liste TODO d'un joueur"
+)
+@app_commands.describe(
+    player="Le joueur concerné",
+    item="L'item à ajouter"
+)
+async def todo_add_cmd(
+    interaction: discord.Interaction,
+    player: str,
+    item: str,
+):
+    server_url = rooms_config.find_server_for_slot(player)
+
+    if server_url is None:
+        await interaction.response.send_message(
+            f"❌ Joueur **{player}** introuvable.",
+            ephemeral=True,
+        )
+        return
+
+    game = rooms_config.game_for(server_url, player)
+
+    if game is None:
+        await interaction.response.send_message(
+            f"❌ Impossible de trouver le jeu de **{player}**.",
+            ephemeral=True,
+        )
+        return
+
+    monitor = active_monitors.get(server_url)
+
+    if monitor is None:
+        await interaction.response.send_message(
+            f"❌ La room **{server_url}** n'est pas surveillée.",
+            ephemeral=True,
+        )
+        return
+
+    items = monitor.item_id_to_name.get(game, {})
+
+    matching_item = next(
+        (
+            name
+            for name in items.values()
+            if name.lower() == item.lower()
+        ),
+        None,
+    )
+
+    if matching_item is None:
+        await interaction.response.send_message(
+            f"❌ **{item}** n'existe pas dans le jeu "
+            f"de **{player}** (`{game}`).",
+            ephemeral=True,
+        )
+        return
+
+    if not rooms_config.add_todo(
+        server_url,
+        player,
+        matching_item,
+    ):
+        await interaction.response.send_message(
+            f"❌ **{matching_item}** est déjà dans la TODO "
+            f"de **{player}**.",
+            ephemeral=True,
+        )
+        return
+
+    await interaction.response.send_message(
+        f"✅ **{matching_item}** a été ajouté à la TODO de "
+        f"**{player}**.",
+    )
