@@ -11,6 +11,7 @@ from discord import app_commands
 from shared import bot, rooms_config, active_monitors, log
 from monitor_manager import restart_monitor, finish_room
 
+#TODO mettre reload_rooms et rooms accessible que par des personnes définies
 @bot.tree.command(name="reload_rooms", description="Recharge rooms.json et (re)démarre les surveillances manquantes")
 async def reload_rooms_cmd(interaction: discord.Interaction):
     from monitor_manager import start_all_monitors
@@ -93,7 +94,8 @@ async def add_room_cmd_error(interaction: discord.Interaction, error: app_comman
     else:
         raise error
 
-
+#TODO ajouter une vérification si le slot existe dans la room
+#TODO verifier si le jeu existe
 @bot.tree.command(name="join", description="Lie un compte Discord à un slot d'une room déjà ajoutée à ce serveur")
 @app_commands.describe(
     port="La room à rejoindre (voir /rooms ou /add_room d'abord)",
@@ -165,7 +167,7 @@ async def deaths_cmd(interaction: discord.Interaction, port: str):
     lines.append(f"\n**Total général : {room_total} mort(s)**")
     await interaction.response.send_message("\n".join(lines))
 
-
+#TODO permettre ça que au "host" de la room ?
 @bot.tree.command(name="reset_deaths", description="Remet à zéro le compteur de morts DeathLink")
 async def reset_deaths_cmd(interaction: discord.Interaction):
     rooms_config.reset_deaths()
@@ -236,6 +238,7 @@ async def _send_hints(interaction: discord.Interaction, slot_name: str, filter_m
         text = text[:1900] + "\n… (liste tronquée)```"
     await interaction.followup.send(text)
 
+#TODO comme reset_deaths ?
 @bot.tree.command(
     name="finish",
     description="Marque une room Archipelago comme terminée"
@@ -338,3 +341,4 @@ async def todo_add_cmd(
         f"✅ **{matching_item}** a été ajouté à la TODO de "
         f"**{player}**.",
     )
+
