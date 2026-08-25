@@ -111,6 +111,9 @@ class RoomsConfig:
     def slots_for(self, server_url: str) -> dict:
         return self.rooms.get(server_url, {}).get("slot", {})
 
+    def room_for(self, server_url: str) -> dict:
+        return self.rooms.get(server_url, {})
+
     def user_id_for(self, server_url: str, slot_name: str) -> int | None:
         entry = self.slots_for(server_url).get(slot_name)
         return entry.get("user_id") if entry else None
@@ -165,6 +168,7 @@ class RoomsConfig:
             "guild_id": guild_id,
             "channel_id": channel_id,
             "password": password,
+            "finish": 0,
             "slot": {},
         }
         self.save()
@@ -255,6 +259,9 @@ async def on_ready():
 
 def start_all_monitors():
     for server_url in rooms_config.server_urls():
+        room = rooms_config.room_for(server_url)
+        if room.get("finish"):
+            continue
         if server_url in monitor_tasks and not monitor_tasks[server_url].done():
             continue
         monitor_tasks[server_url] = bot.loop.create_task(archipelago_loop(server_url))
@@ -298,10 +305,10 @@ async def rooms_cmd(interaction: discord.Interaction):
             )
     await interaction.response.send_message("\n".join(lines), ephemeral=True)
 
-
+#TODO change server_url to port
 @bot.tree.command(name="add_room", description="Ajoute une room Archipelago (avec au moins un slot), liée à ce serveur Discord")
 @app_commands.describe(
-    server_url="Adresse de la room, ex: archipelago.gg:12345 (le préfixe wss:// est ajouté automatiquement)",
+    port="Adresse de la room, ex: archipelago.gg:12345 (le préfixe wss:// est ajouté automatiquement)",
     slot_name="Ton nom de slot exact dans cette room (le premier joueur lié)",
     game="Le jeu tel que déclaré dans ton yaml",
     password="Mot de passe de la room (laisse vide si aucun)",
@@ -309,13 +316,12 @@ async def rooms_cmd(interaction: discord.Interaction):
 @app_commands.checks.has_permissions(manage_guild=True)
 async def add_room_cmd(
     interaction: discord.Interaction,
-    server_url: str,
+    port: str,
     slot_name: str,
     game: str,
     password: str = "",
 ):
-    if not server_url.startswith("wss://") and not server_url.startswith("ws://"):
-        server_url = "wss://" + server_url
+    server_url = "wss://archipelago.gg:" + port
 
     if interaction.guild_id is None:
         await interaction.response.send_message(
@@ -352,32 +358,21 @@ async def add_room_cmd_error(interaction: discord.Interaction, error: app_comman
     else:
         raise error
 
-
-async def server_url_autocomplete(interaction: discord.Interaction, current: str):
-    urls = rooms_config.rooms_for_guild(interaction.guild_id)
-    return [
-        app_commands.Choice(name=u, value=u)
-        for u in urls if current.lower() in u.lower()
-    ][:25]
-
-
 @bot.tree.command(name="join", description="Lie un compte Discord à un slot d'une room déjà ajoutée à ce serveur")
 @app_commands.describe(
-    server_url="La room à rejoindre (voir /rooms ou /add_room d'abord)",
+    port="La room à rejoindre (voir /rooms ou /add_room d'abord)",
     slot_name="Ton nom de slot exact dans cette room",
     game="Le jeu tel que déclaré dans ton yaml",
     user="Lier ce membre au lieu de toi-même (optionnel)",
 )
-@app_commands.autocomplete(server_url=server_url_autocomplete)
 async def join_cmd(
     interaction: discord.Interaction,
-    server_url: str,
+    port: str,
     slot_name: str,
     game: str,
     user: discord.Member | None = None,
 ):
-    if not server_url.startswith("wss://") and not server_url.startswith("ws://"):
-        server_url = "wss://" + server_url
+    server_url = "wss://archipelago.gg:" + port
 
     if server_url not in rooms_config.rooms:
         await interaction.response.send_message(
@@ -395,14 +390,11 @@ async def join_cmd(
         ephemeral=True,
     )
 
-
 @bot.tree.command(name="set_channel", description="Change le salon de notifications d'une room vers le salon courant")
-@app_commands.describe(server_url="La room à modifier (voir /rooms)")
-@app_commands.autocomplete(server_url=server_url_autocomplete)
+@app_commands.describe(port="La room à modifier (voir /rooms)")
 @app_commands.checks.has_permissions(manage_guild=True)
-async def set_channel_cmd(interaction: discord.Interaction, server_url: str):
-    if not server_url.startswith("wss://") and not server_url.startswith("ws://"):
-        server_url = "wss://" + server_url
+async def set_channel_cmd(interaction: discord.Interaction, port: str):
+    server_url = "wss://archipelago.gg:" + port
 
     ok = rooms_config.set_channel_id(server_url, interaction.channel_id)
     if not ok:
@@ -414,25 +406,27 @@ async def set_channel_cmd(interaction: discord.Interaction, server_url: str):
     )
 
 
+
 @bot.tree.command(name="deaths", description="Affiche le compteur de morts DeathLink")
-async def deaths_cmd(interaction: discord.Interaction):
-    if not rooms_config.rooms:
+@app_commands.describe(port="La room à lister les morts des joueurs")
+async def deaths_cmd(interaction: discord.Interaction, port: str):
+    server_url = "wss://archipelago.gg:" + port
+    room = rooms_config.room_for(server_url)
+    if not room:
         await interaction.response.send_message("Aucune room configurée.", ephemeral=True)
         return
 
     lines = []
-    for server_url in rooms_config.server_urls():
-        counts = {name: info.get("death", 0) for name, info in rooms_config.slots_for(server_url).items()}
-        room_total = rooms_config.total_deaths_for_room(server_url)
-        lines.append(f"**{server_url}** — {room_total} mort(s) au total")
-        if any(counts.values()):
-            for slot_name, count in sorted(counts.items(), key=lambda kv: -kv[1]):
-                if count:
-                    lines.append(f"  💀 {slot_name} : {count}")
-        else:
-            lines.append("  _Aucune mort enregistrée pour l'instant_")
+    counts = {name: info.get("death", 0) for name, info in rooms_config.slots_for(server_url).items()}
+    room_total = rooms_config.total_deaths_for_room(server_url)
+    lines.append(f"**Résumé des morts:**")
+    if any(counts.values()):
+        for slot_name, count in sorted(counts.items(), key=lambda kv: -kv[1]):
+            lines.append(f"  💀 {slot_name} : {count}")
+    else:
+        lines.append("  _Aucune mort enregistrée pour l'instant_")
 
-    lines.append(f"\n**Total général : {rooms_config.total_deaths_all()} mort(s)**")
+    lines.append(f"\n**Total général : {room_total} mort(s)**")
     await interaction.response.send_message("\n".join(lines))
 
 
