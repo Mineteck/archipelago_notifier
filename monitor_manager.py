@@ -9,37 +9,16 @@ import websockets
 
 from shared import bot, rooms_config, monitor_tasks, active_monitors, log
 from archipelago_monitor import ArchipelagoMonitor
-from notifications import notify_room_finished
+
 
 def start_all_monitors():
     for server_url in rooms_config.server_urls():
-        room = rooms_config.room_for(server_url)
-        if room.get("finish"):
+        if rooms_config.is_room_finished(server_url):
             continue
         if server_url in monitor_tasks and not monitor_tasks[server_url].done():
             continue
         monitor_tasks[server_url] = bot.loop.create_task(archipelago_loop(server_url))
 
-def stop_monitor(server_url: str):
-    task = monitor_tasks.get(server_url)
-
-    if task and not task.done():
-        task.cancel()
-
-    monitor_tasks.pop(server_url, None)
-    active_monitors.pop(server_url, None)
-
-async def finish_room(server_url: str):
-    """Marque une room comme terminée et arrête sa surveillance."""
-
-    if not rooms_config.set_finish_state(server_url, 1):
-        return False
-
-    stop_monitor(server_url)
-
-    await notify_room_finished(server_url)
-
-    return True
 
 def restart_monitor(server_url: str):
     """Arrête (si besoin) puis relance la tâche de surveillance d'une room."""
@@ -50,13 +29,44 @@ def restart_monitor(server_url: str):
     monitor_tasks[server_url] = bot.loop.create_task(archipelago_loop(server_url))
 
 
+def stop_monitor(server_url: str):
+    """Arrête définitivement la surveillance d'une room, sans la relancer.
+    Utilisé par /finish_room et par l'arrêt automatique une fois la room
+    marquée terminée."""
+    task = monitor_tasks.pop(server_url, None)
+    if task and not task.done():
+        task.cancel()
+    active_monitors.pop(server_url, None)
+
+
 async def archipelago_loop(server_url: str):
     await bot.wait_until_ready()
-    monitor = ArchipelagoMonitor(server_url, rooms_config, finish_room)
+
+    if rooms_config.is_room_finished(server_url):
+        log.info("[%s] Room déjà marquée terminée, surveillance non démarrée.", server_url)
+        return
+
+    monitor = ArchipelagoMonitor(server_url, rooms_config)
     active_monitors[server_url] = monitor
+
     while not bot.is_closed():
+        if monitor.should_stop or rooms_config.is_room_finished(server_url):
+            log.info("[%s] Room terminée, arrêt définitif de la surveillance.", server_url)
+            break
+
         try:
             await monitor.run()
         except (websockets.ConnectionClosed, OSError) as e:
+            if monitor.should_stop or rooms_config.is_room_finished(server_url):
+                log.info("[%s] Room terminée, arrêt définitif de la surveillance.", server_url)
+                break
             log.warning("[%s] Connexion perdue (%s), nouvelle tentative dans 10s...", server_url, e)
             await asyncio.sleep(10)
+        else:
+            # run() est revenu sans exception (fermeture propre) : petite
+            # pause pour éviter une boucle de reconnexion trop agressive,
+            # sauf si on s'arrête volontairement.
+            if not monitor.should_stop:
+                await asyncio.sleep(5)
+
+    active_monitors.pop(server_url, None)
