@@ -12,183 +12,220 @@ log = logging.getLogger("ap-discord-bot")
 
 
 class RoomsConfig:
-	"""Charge, recharge et modifie rooms.json à la demande."""
+    """Charge, recharge et modifie rooms.json à la demande."""
 
-	def __init__(self, path: Path):
-		self.path = path
-		self.rooms: dict = {}
-		self.load()
+    def __init__(self, path: Path):
+        self.path = path
+        self.rooms: dict = {}
+        self.load()
 
-	def load(self):
-		if not self.path.exists():
-			log.warning("%s introuvable, aucune room configurée.", self.path)
-			self.rooms = {}
-			return
-		text = self.path.read_text(encoding="utf-8").strip()
-		if not text:
-			log.warning("%s est vide, aucune room configurée.", self.path)
-			self.rooms = {}
-			return
-		try:
-			self.rooms = json.loads(text)
-		except json.JSONDecodeError as e:
-			log.error("%s est invalide (%s), aucune room chargée.", self.path, e)
-			self.rooms = {}
-			return
-		log.info("Config chargée : %d room(s)", len(self.rooms))
+    def load(self):
+        if not self.path.exists():
+            log.warning("%s introuvable, aucune room configurée.", self.path)
+            self.rooms = {}
+            return
+        text = self.path.read_text(encoding="utf-8").strip()
+        if not text:
+            log.warning("%s est vide, aucune room configurée.", self.path)
+            self.rooms = {}
+            return
+        try:
+            self.rooms = json.loads(text)
+        except json.JSONDecodeError as e:
+            log.error("%s est invalide (%s), aucune room chargée.", self.path, e)
+            self.rooms = {}
+            return
+        log.info("Config chargée : %d room(s)", len(self.rooms))
 
-	def save(self):
-		self.path.write_text(json.dumps(self.rooms, indent=2, ensure_ascii=False), encoding="utf-8")
+    def save(self):
+        self.path.write_text(json.dumps(self.rooms, indent=2, ensure_ascii=False), encoding="utf-8")
 
-	def server_urls(self) -> list[str]:
-		return list(self.rooms.keys())
+    def server_urls(self) -> list[str]:
+        return list(self.rooms.keys())
 
-	def password_for(self, server_url: str) -> str:
-		return self.rooms.get(server_url, {}).get("password", "") or ""
+    def password_for(self, server_url: str) -> str:
+        return self.rooms.get(server_url, {}).get("password", "") or ""
 
-	def slots_for(self, server_url: str) -> dict:
-		return self.rooms.get(server_url, {}).get("slot", {})
+    def slots_for(self, server_url: str) -> dict:
+        return self.rooms.get(server_url, {}).get("slot", {})
 
-	def room_for(self, server_url: str) -> dict:
-		return self.rooms.get(server_url, {})
+    def room_for(self, server_url: str) -> dict:
+        return self.rooms.get(server_url, {})
 
-	def user_id_for(self, server_url: str, slot_name: str) -> int | None:
-		entry = self.slots_for(server_url).get(slot_name)
-		return entry.get("user_id") if entry else None
+    def user_id_for(self, server_url: str, slot_name: str) -> int | None:
+        entry = self.slots_for(server_url).get(slot_name)
+        return entry.get("user_id") if entry else None
 
-	def game_for(self, server_url: str, slot_name: str) -> str | None:
-		entry = self.slots_for(server_url).get(slot_name)
-		return entry.get("game") if entry else None
+    def game_for(self, server_url: str, slot_name: str) -> str | None:
+        entry = self.slots_for(server_url).get(slot_name)
+        return entry.get("game") if entry else None
 
-	def any_slot_name(self, server_url: str) -> str | None:
-		slots = self.slots_for(server_url)
-		return next(iter(slots), None)
+    def any_slot_name(self, server_url: str) -> str | None:
+        slots = self.slots_for(server_url)
+        return next(iter(slots), None)
 
-	def games_for(self, server_url: str) -> list[str]:
-		return sorted({v["game"] for v in self.slots_for(server_url).values()})
+    def games_for(self, server_url: str) -> list[str]:
+        return sorted({v["game"] for v in self.slots_for(server_url).values()})
 
-	def find_server_for_slot(self, slot_name: str) -> str | None:
-		target = slot_name.lower()
-		for server_url in self.server_urls():
-			for name in self.slots_for(server_url):
-				if name.lower() == target:
-					return server_url
-		return None
+    def find_server_for_slot(self, slot_name: str) -> str | None:
+        target = slot_name.lower()
+        for server_url in self.server_urls():
+            for name in self.slots_for(server_url):
+                if name.lower() == target:
+                    return server_url
+        return None
 
-	def _find_slot_key(self, server_url: str, slot_name: str) -> str | None:
-		"""Retrouve la clé exacte (casse d'origine) d'un slot, insensible à la casse."""
-		target = slot_name.lower()
-		for name in self.slots_for(server_url):
-			if name.lower() == target:
-				return name
-		return None
+    def _find_slot_key(self, server_url: str, slot_name: str) -> str | None:
+        """Retrouve la clé exacte (casse d'origine) d'un slot, insensible à la casse."""
+        target = slot_name.lower()
+        for name in self.slots_for(server_url):
+            if name.lower() == target:
+                return name
+        return None
 
-	def guild_id_for(self, server_url: str) -> int | None:
-		return self.rooms.get(server_url, {}).get("guild_id")
+    def guild_id_for(self, server_url: str) -> int | None:
+        return self.rooms.get(server_url, {}).get("guild_id")
 
-	def channel_id_for(self, server_url: str) -> int | None:
-		return self.rooms.get(server_url, {}).get("channel_id")
+    def channel_id_for(self, server_url: str) -> int | None:
+        return self.rooms.get(server_url, {}).get("channel_id")
 
-	def set_channel_id(self, server_url: str, channel_id: int) -> bool:
-		if server_url not in self.rooms:
-			return False
-		self.rooms[server_url]["channel_id"] = channel_id
-		self.save()
-		return True
+    def set_channel_id(self, server_url: str, channel_id: int) -> bool:
+        if server_url not in self.rooms:
+            return False
+        self.rooms[server_url]["channel_id"] = channel_id
+        self.save()
+        return True
 
-	def set_finish_state(self, server_url: str, state: int) -> bool:
-		if server_url not in self.rooms:
-			return False
-		self.rooms[server_url]["finish"] = state
-		self.save()
-		return True
-			
+    def rooms_for_guild(self, guild_id: int | None) -> list[str]:
+        return [url for url, data in self.rooms.items() if data.get("guild_id") == guild_id]
 
-	def rooms_for_guild(self, guild_id: int | None) -> list[str]:
-		return [url for url, data in self.rooms.items() if data.get("guild_id") == guild_id]
+    def add_room(self, server_url: str, password: str, guild_id: int, channel_id: int) -> bool:
+        if server_url in self.rooms:
+            return False
+        self.rooms[server_url] = {
+            "guild_id": guild_id,
+            "channel_id": channel_id,
+            "password": password,
+            "finish": 0,
+            "slot": {},
+        }
+        self.save()
+        return True
 
-	def add_room(self, server_url: str, password: str, guild_id: int, channel_id: int) -> bool:
-		if server_url in self.rooms:
-			return False
-		self.rooms[server_url] = {
-			"guild_id": guild_id,
-			"channel_id": channel_id,
-			"password": password,
-			"finish": 0,
-			"slot": {},
-		}
-		self.save()
-		return True
+    def add_slot(self, server_url: str, slot_name: str, user_id: int, game: str) -> bool:
+        """Ajoute ou met à jour un slot. Préserve death/finish/todo si le
+        slot existait déjà (rejoindre ne doit pas effacer ces données)."""
+        if server_url not in self.rooms:
+            return False
+        slots = self.rooms[server_url].setdefault("slot", {})
+        key = self._find_slot_key(server_url, slot_name) or slot_name
+        existing = slots.get(key, {})
+        slots[key] = {
+            "user_id": user_id,
+            "game": game,
+            "death": existing.get("death", 0),
+            "finish": existing.get("finish", 0),
+            "todo": existing.get("todo", []),
+        }
+        self.save()
+        return True
 
-	def add_slot(self, server_url: str, slot_name: str, user_id: int, game: str) -> bool:
-		"""Ajoute ou met à jour un slot. Préserve death/finish si le slot
-		existait déjà (rejoindre ne doit pas remettre les compteurs à zéro)."""
-		if server_url not in self.rooms:
-			return False
-		slots = self.rooms[server_url].setdefault("slot", {})
-		key = self._find_slot_key(server_url, slot_name) or slot_name
-		existing = slots.get(key, {})
-		slots[key] = {
-			"user_id": user_id,
-			"game": game,
-			"death": existing.get("death", 0),
-			"finish": existing.get("finish", 0),
-		}
-		self.save()
-		return True
+    # -- Victoire (Goal) --------------------------------------------------
 
-	# -- Victoire (Goal) --------------------------------------------------
+    def is_finished(self, server_url: str, slot_name: str) -> bool:
+        key = self._find_slot_key(server_url, slot_name)
+        if key is None:
+            return False
+        return bool(self.rooms[server_url]["slot"][key].get("finish", 0))
 
-	def all_finished(self, server_url: str) -> bool:
-		slots = self.slots_for(server_url)
+    def mark_finished(self, server_url: str, slot_name: str):
+        key = self._find_slot_key(server_url, slot_name)
+        if key is None:
+            return
+        self.rooms[server_url]["slot"][key]["finish"] = 1
+        self.save()
 
-		if not slots:
-			return False
+    # -- Compteur de morts DeathLink --------------------------------------
 
-		return all(
-			info.get("finish", 0) == 1
-			for info in slots.values()
-		)
+    def death_count_for(self, server_url: str, slot_name: str) -> int:
+        key = self._find_slot_key(server_url, slot_name)
+        if key is None:
+            return 0
+        return self.rooms[server_url]["slot"][key].get("death", 0)
 
-	def is_finished(self, server_url: str, slot_name: str) -> bool:
-		key = self._find_slot_key(server_url, slot_name)
-		if key is None:
-			return False
-		return bool(self.rooms[server_url]["slot"][key].get("finish", 0))
+    def increment_death(self, server_url: str, slot_name: str) -> int:
+        key = self._find_slot_key(server_url, slot_name)
+        if key is None:
+            return 0
+        slot = self.rooms[server_url]["slot"][key]
+        slot["death"] = slot.get("death", 0) + 1
+        self.save()
+        return slot["death"]
 
-	def mark_finished(self, server_url: str, slot_name: str):
-		key = self._find_slot_key(server_url, slot_name)
-		if key is None:
-			return
-		self.rooms[server_url]["slot"][key]["finish"] = 1
-		self.save()
+    def total_deaths_for_room(self, server_url: str) -> int:
+        return sum(v.get("death", 0) for v in self.slots_for(server_url).values())
 
-	# -- Compteur de morts DeathLink --------------------------------------
+    def total_deaths_all(self) -> int:
+        return sum(self.total_deaths_for_room(u) for u in self.server_urls())
 
-	def death_count_for(self, server_url: str, slot_name: str) -> int:
-		key = self._find_slot_key(server_url, slot_name)
-		if key is None:
-			return 0
-		return self.rooms[server_url]["slot"][key].get("death", 0)
+    def all_finished(self, server_url: str) -> bool:
+        """True si la room a au moins un slot et que tous ont fini (finish=1)."""
+        slots = self.slots_for(server_url)
+        if not slots:
+            return False
+        return all(info.get("finish", 0) for info in slots.values())
 
-	def increment_death(self, server_url: str, slot_name: str) -> int:
-		key = self._find_slot_key(server_url, slot_name)
-		if key is None:
-			return 0
-		slot = self.rooms[server_url]["slot"][key]
-		slot["death"] = slot.get("death", 0) + 1
-		self.save()
-		return slot["death"]
+    def is_room_finished(self, server_url: str) -> bool:
+        return bool(self.room_for(server_url).get("finish", 0))
 
-	def total_deaths_for_room(self, server_url: str) -> int:
-		return sum(v.get("death", 0) for v in self.slots_for(server_url).values())
+    def mark_room_finished(self, server_url: str):
+        if server_url not in self.rooms:
+            return
+        self.rooms[server_url]["finish"] = 1
+        self.save()
 
-	def total_deaths_all(self) -> int:
-		return sum(self.total_deaths_for_room(u) for u in self.server_urls())
+    def reset_deaths(self, server_url: str | None = None):
+        targets = [server_url] if server_url else self.server_urls()
+        for url in targets:
+            for slot in self.rooms.get(url, {}).get("slot", {}).values():
+                slot["death"] = 0
+        self.save()
 
-	def reset_deaths(self, server_url: str | None = None):
-		targets = [server_url] if server_url else self.server_urls()
-		for url in targets:
-			for slot in self.rooms.get(url, {}).get("slot", {}).values():
-				slot["death"] = 0
-		self.save()
+    # -- Liste TODO par joueur --------------------------------------------
+
+    def todos_for(self, server_url: str, slot_name: str) -> list[str]:
+        key = self._find_slot_key(server_url, slot_name)
+        if key is None:
+            return []
+        return self.rooms[server_url]["slot"][key].get("todo", [])
+
+    def add_todo(self, server_url: str, slot_name: str, item_name: str) -> bool:
+        """Ajoute un item à la TODO d'un slot. False si déjà présent ou
+        slot introuvable."""
+        key = self._find_slot_key(server_url, slot_name)
+        if key is None:
+            return False
+        slot = self.rooms[server_url]["slot"][key]
+        todo = slot.setdefault("todo", [])
+        if any(t.lower() == item_name.lower() for t in todo):
+            return False
+        todo.append(item_name)
+        self.save()
+        return True
+
+    def remove_todo(self, server_url: str, slot_name: str, item_name: str) -> bool:
+        key = self._find_slot_key(server_url, slot_name)
+        if key is None:
+            return False
+        slot = self.rooms[server_url]["slot"][key]
+        todo = slot.get("todo", [])
+        target = item_name.lower()
+        new_todo = [t for t in todo if t.lower() != target]
+        if len(new_todo) == len(todo):
+            return False
+        slot["todo"] = new_todo
+        self.save()
+        return True
+
+    def is_todo(self, server_url: str, slot_name: str, item_name: str) -> bool:
+        return any(t.lower() == item_name.lower() for t in self.todos_for(server_url, slot_name))

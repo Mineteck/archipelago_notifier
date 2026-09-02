@@ -8,8 +8,10 @@ import asyncio
 import discord
 from discord import app_commands
 
-from shared import bot, rooms_config, active_monitors, log
-from monitor_manager import restart_monitor, finish_room
+from shared import bot, rooms_config, active_monitors
+from monitor_manager import restart_monitor, stop_monitor
+from notifications import notify_room_complete
+
 
 @bot.tree.command(name="reload_rooms", description="Recharge rooms.json et (re)démarre les surveillances manquantes")
 async def reload_rooms_cmd(interaction: discord.Interaction):
@@ -41,6 +43,8 @@ async def rooms_cmd(interaction: discord.Interaction):
             )
     await interaction.response.send_message("\n".join(lines), ephemeral=True)
 
+
+# TODO change server_url to port
 @bot.tree.command(name="add_room", description="Ajoute une room Archipelago (avec au moins un slot), liée à ce serveur Discord")
 @app_commands.describe(
     port="Adresse de la room, ex: archipelago.gg:12345 (le préfixe wss:// est ajouté automatiquement)",
@@ -172,6 +176,39 @@ async def reset_deaths_cmd(interaction: discord.Interaction):
     await interaction.response.send_message("🔄 Compteur de morts remis à zéro.", ephemeral=True)
 
 
+@bot.tree.command(name="finish_room", description="Marque une room comme terminée et arrête sa surveillance")
+@app_commands.describe(port="La room à terminer (voir /rooms)")
+@app_commands.checks.has_permissions(manage_guild=True)
+async def finish_room_cmd(interaction: discord.Interaction, port: str):
+    server_url = "wss://archipelago.gg:" + port
+
+    if server_url not in rooms_config.rooms:
+        await interaction.response.send_message(f"Room **{server_url}** inconnue.", ephemeral=True)
+        return
+
+    if rooms_config.is_room_finished(server_url):
+        await interaction.response.send_message(f"Room **{server_url}** déjà marquée terminée.", ephemeral=True)
+        return
+
+    rooms_config.mark_room_finished(server_url)
+    stop_monitor(server_url)
+    await notify_room_complete(server_url)
+
+    await interaction.response.send_message(
+        f"🏁 Room **{server_url}** marquée terminée, surveillance arrêtée.", ephemeral=True
+    )
+
+
+@finish_room_cmd.error
+async def finish_room_cmd_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
+    if isinstance(error, app_commands.MissingPermissions):
+        await interaction.response.send_message(
+            "Il faut la permission **Gérer le serveur** pour terminer une room.", ephemeral=True
+        )
+    else:
+        raise error
+
+
 @bot.tree.command(name="hints", description="Affiche tous les hints connus concernant un joueur (tableau)")
 @app_commands.describe(slot_name="Le nom de slot Archipelago du joueur")
 async def hints_cmd(interaction: discord.Interaction, slot_name: str):
@@ -236,29 +273,113 @@ async def _send_hints(interaction: discord.Interaction, slot_name: str, filter_m
         text = text[:1900] + "\n… (liste tronquée)```"
     await interaction.followup.send(text)
 
+
 @bot.tree.command(
-    name="finish",
-    description="Marque une room Archipelago comme terminée"
+    name="todo_add",
+    description="Ajoute un item à la liste TODO d'un joueur"
 )
 @app_commands.describe(
-    port="Le port de la room Archipelago à marquer comme terminée"
+    player="Le joueur concerné",
+    item="L'item à ajouter"
 )
-async def finish_room_cmd(
+async def todo_add_cmd(
     interaction: discord.Interaction,
-    port: str,
+    player: str,
+    item: str,
 ):
-    server_url = "wss://archipelago.gg:" + port
+    server_url = rooms_config.find_server_for_slot(player)
 
-    if server_url not in rooms_config.rooms:
+    if server_url is None:
         await interaction.response.send_message(
-            f"Room **{server_url}** inconnue.",
+            f"❌ Joueur **{player}** introuvable.",
             ephemeral=True,
         )
         return
 
-    await finish_room(server_url)
+    game = rooms_config.game_for(server_url, player)
+
+    if game is None:
+        await interaction.response.send_message(
+            f"❌ Impossible de trouver le jeu de **{player}**.",
+            ephemeral=True,
+        )
+        return
+
+    monitor = active_monitors.get(server_url)
+
+    if monitor is None:
+        await interaction.response.send_message(
+            f"❌ La room **{server_url}** n'est pas surveillée.",
+            ephemeral=True,
+        )
+        return
+
+    items = monitor.item_id_to_name.get(game, {})
+
+    matching_item = next(
+        (
+            name
+            for name in items.values()
+            if name.lower() == item.lower()
+        ),
+        None,
+    )
+
+    if matching_item is None:
+        await interaction.response.send_message(
+            f"❌ **{item}** n'existe pas dans le jeu "
+            f"de **{player}** (`{game}`).",
+            ephemeral=True,
+        )
+        return
+
+    if not rooms_config.add_todo(
+        server_url,
+        player,
+        matching_item,
+    ):
+        await interaction.response.send_message(
+            f"❌ **{matching_item}** est déjà dans la TODO "
+            f"de **{player}**.",
+            ephemeral=True,
+        )
+        return
 
     await interaction.response.send_message(
-        f"✅ La room **{server_url}** a été arrêtée.",
-        ephemeral=True,
+        f"✅ **{matching_item}** a été ajouté à la TODO de "
+        f"**{player}**.",
     )
+
+
+@bot.tree.command(name="todo_list", description="Liste la TODO d'un joueur")
+@app_commands.describe(player="Le joueur concerné")
+async def todo_list_cmd(interaction: discord.Interaction, player: str):
+    server_url = rooms_config.find_server_for_slot(player)
+    if server_url is None:
+        await interaction.response.send_message(f"❌ Joueur **{player}** introuvable.", ephemeral=True)
+        return
+
+    todo = rooms_config.todos_for(server_url, player)
+    if not todo:
+        await interaction.response.send_message(f"La TODO de **{player}** est vide.", ephemeral=True)
+        return
+
+    lines = [f"**TODO de {player} :**"] + [f"  • {item}" for item in todo]
+    await interaction.response.send_message("\n".join(lines), ephemeral=True)
+
+
+@bot.tree.command(name="todo_remove", description="Retire un item de la TODO d'un joueur")
+@app_commands.describe(player="Le joueur concerné", item="L'item à retirer")
+async def todo_remove_cmd(interaction: discord.Interaction, player: str, item: str):
+    server_url = rooms_config.find_server_for_slot(player)
+    if server_url is None:
+        await interaction.response.send_message(f"❌ Joueur **{player}** introuvable.", ephemeral=True)
+        return
+
+    if not rooms_config.remove_todo(server_url, player, item):
+        await interaction.response.send_message(
+            f"❌ **{item}** n'était pas dans la TODO de **{player}**.", ephemeral=True
+        )
+        return
+
+    await interaction.response.send_message(f"🗑️ **{item}** retiré de la TODO de **{player}**.", ephemeral=True)
