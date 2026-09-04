@@ -57,6 +57,12 @@ class ArchipelagoMonitor:
         # rooms.json à chaque connexion (une fois qu'on connaît slot_numbers)
         self.finished_slot_nums: set[int] = set()
 
+        # slots ayant fait un Release/Collect : leurs items restants sont
+        # envoyés d'un coup par le serveur (rafale d'ItemSend individuels
+        # en plus du message Release groupé) — on les ignore une fois la
+        # rafale identifiée, pour éviter le spam.
+        self.released_slot_nums: set[int] = set()
+
         # True dès que TOUS les slots de la room ont terminé : empêche toute
         # reconnexion ultérieure de cette room (lu par monitor_manager).
         self.should_stop: bool = False
@@ -157,7 +163,7 @@ class ArchipelagoMonitor:
         # Un joueur qui a déjà terminé son objectif ne doit plus générer de
         # notification d'item reçu (typiquement les rafales post-Goal /
         # post-Release).
-        if receiving_slot in self.finished_slot_nums:
+        if receiving_slot in self.finished_slot_nums or sender_slot in self.released_slot_nums:
             return
 
         receiver_name = self.slot_names.get(receiving_slot, f"Slot#{receiving_slot}")
@@ -208,7 +214,16 @@ class ArchipelagoMonitor:
             if isinstance(part, dict) and part.get("type") == "player_id":
                 slot_num = part.get("text")
                 break
-        slot_name = self.slot_names.get(int(slot_num), f"Slot#{slot_num}") if slot_num else "Un joueur"
+
+        if slot_num is not None:
+            slot_num = int(slot_num)
+            # Empêche le flood d'ItemSend individuels qui accompagne
+            # toujours un Release/Collect (tous les items restants de ce
+            # monde partent d'un coup) — seul le message groupé ci-dessous
+            # doit apparaître.
+            self.released_slot_nums.add(slot_num)
+
+        slot_name = self.slot_names.get(slot_num, f"Slot#{slot_num}") if slot_num is not None else "Un joueur"
         action = "relâché" if pkt.get("type") == "Release" else "récupéré"
         await notify_bulk_release(self.server_url, slot_name, action)
 
