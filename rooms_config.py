@@ -125,6 +125,7 @@ class RoomsConfig:
             "game": game,
             "death": existing.get("death", 0),
             "finish": existing.get("finish", 0),
+            "released": existing.get("released", 0),
             "todo": existing.get("todo", []),
         }
         self.save()
@@ -143,6 +144,24 @@ class RoomsConfig:
         if key is None:
             return
         self.rooms[server_url]["slot"][key]["finish"] = 1
+        self.save()
+
+    # -- Monde relâché (Release/Collect/Goal) -----------------------------
+    # Un monde relâché n'a plus de checks restants à envoyer : utile pour
+    # savoir, après un redémarrage, quels slots ignorer côté expéditeur
+    # afin d'éviter tout flood résiduel d'items.
+
+    def is_released(self, server_url: str, slot_name: str) -> bool:
+        key = self._find_slot_key(server_url, slot_name)
+        if key is None:
+            return False
+        return bool(self.rooms[server_url]["slot"][key].get("released", 0))
+
+    def mark_released(self, server_url: str, slot_name: str):
+        key = self._find_slot_key(server_url, slot_name)
+        if key is None:
+            return
+        self.rooms[server_url]["slot"][key]["released"] = 1
         self.save()
 
     # -- Compteur de morts DeathLink --------------------------------------

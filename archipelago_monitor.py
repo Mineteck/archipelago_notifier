@@ -128,6 +128,14 @@ class ArchipelagoMonitor:
                     num for name, num in self.slot_numbers.items()
                     if self.config.is_finished(self.server_url, name)
                 }
+                # Un slot déjà fini implique aussi son monde relâché (voir
+                # handle_goal) ; on reconstruit released_slot_nums pareil,
+                # pour que la suppression survive à un redémarrage du bot.
+                self.released_slot_nums = {
+                    num for name, num in self.slot_numbers.items()
+                    if self.config.is_released(self.server_url, name)
+                    or self.config.is_finished(self.server_url, name)
+                }
                 log.info("[%s] Surveillance active, %d joueur(s)", self.server_url, len(self.slot_names))
 
             elif cmd == "ConnectionRefused":
@@ -160,9 +168,8 @@ class ArchipelagoMonitor:
         receiving_slot = pkt.get("receiving")
         sender_slot = item_data.get("player")
 
-        # Un joueur qui a déjà terminé son objectif ne doit plus générer de
-        # notification d'item reçu (typiquement les rafales post-Goal /
-        # post-Release).
+        # Optimisation : si on sait déjà que c'est suppressible, inutile de
+        # planifier quoi que ce soit.
         if receiving_slot in self.finished_slot_nums or sender_slot in self.released_slot_nums:
             return
 
@@ -172,6 +179,27 @@ class ArchipelagoMonitor:
         receiver_game = self.config.game_for(self.server_url, receiver_name)
         game_items = self.item_id_to_name.get(receiver_game, {})
         item_name = game_items.get(item_data.get("item"), f"Item#{item_data.get('item')}")
+
+        # Le paquet Release/Goal correspondant peut arriver juste APRÈS la
+        # rafale d'ItemSend qu'il déclenche (ordre non garanti). On lance la
+        # notification en tâche de fond avec un très court délai, pour
+        # laisser le temps à ce paquet d'arriver et de mettre à jour
+        # released_slot_nums/finished_slot_nums avant l'envoi effectif —
+        # sans bloquer la lecture des paquets suivants sur le WebSocket.
+        asyncio.create_task(
+            self._notify_item_send_deferred(receiving_slot, sender_slot, receiver_name, sender_name, item_name)
+        )
+
+    async def _notify_item_send_deferred(
+        self, receiving_slot: int, sender_slot: int, receiver_name: str, sender_name: str, item_name: str
+    ):
+        await asyncio.sleep(1.0)
+
+        # Re-vérifie après le délai : si un Release/Goal concernant ce
+        # monde ou ce destinataire est arrivé entre-temps, on annule ce
+        # message individuel (déjà couvert par le résumé groupé).
+        if receiving_slot in self.finished_slot_nums or sender_slot in self.released_slot_nums:
+            return
 
         if self.config.is_todo(self.server_url, receiver_name, item_name):
             self.config.remove_todo(self.server_url, receiver_name, item_name)
@@ -192,7 +220,15 @@ class ArchipelagoMonitor:
             return
 
         self.finished_slot_nums.add(slot_num)
+        # Un joueur qui termine son Goal peut voir le serveur compléter
+        # automatiquement les checks restants de son propre monde (selon la
+        # config de release de la room), générant une rafale d'ItemSend
+        # sans forcément passer par un paquet Release explicite. On coupe
+        # ça préventivement, comme pour un vrai Release, et on le persiste
+        # pour que ça survive à un redémarrage.
+        self.released_slot_nums.add(slot_num)
         self.config.mark_finished(self.server_url, slot_name)
+        self.config.mark_released(self.server_url, slot_name)
 
         await notify_goal(self.server_url, slot_name)
 
@@ -208,20 +244,19 @@ class ArchipelagoMonitor:
                 await self.ws.close()
 
     async def handle_bulk_release(self, pkt):
-        data = pkt.get("data", [])
-        slot_num = None
-        for part in data:
-            if isinstance(part, dict) and part.get("type") == "player_id":
-                slot_num = part.get("text")
-                break
+        # Le numéro de slot est directement au niveau racine du paquet
+        # (comme pour Goal), pas dans une partie "data" de type "player_id".
+        slot_num = pkt.get("slot")
 
         if slot_num is not None:
-            slot_num = int(slot_num)
             # Empêche le flood d'ItemSend individuels qui accompagne
             # toujours un Release/Collect (tous les items restants de ce
             # monde partent d'un coup) — seul le message groupé ci-dessous
-            # doit apparaître.
+            # doit apparaître. Persisté pour survivre à un redémarrage.
             self.released_slot_nums.add(slot_num)
+            slot_name_for_config = self.slot_names.get(slot_num)
+            if slot_name_for_config:
+                self.config.mark_released(self.server_url, slot_name_for_config)
 
         slot_name = self.slot_names.get(slot_num, f"Slot#{slot_num}") if slot_num is not None else "Un joueur"
         action = "relâché" if pkt.get("type") == "Release" else "récupéré"
