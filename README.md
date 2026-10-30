@@ -6,12 +6,18 @@
 
 Il associe les slots Archipelago à des membres Discord, suit plusieurs rooms simultanément et conserve l'état des parties pour faciliter leur suivi.
 
+## 🤖 Inviter le bot
+
+Ajoutez **Archipelago Notifier** à votre serveur Discord pour recevoir les notifications de vos parties Archipelago.
+
+[![Inviter le bot](https://img.shields.io/badge/Discord-Inviter_le_bot-5865F2?logo=discord&logoColor=white)](https://discord.com/oauth2/authorize?client_id=1540372862513455215)
+
 ## Fonctionnalités
 
 - 🔔 Notifications Discord lors de la réception d'objets, y compris les objets en attente.
 - 💀 Suivi des morts **DeathLink** et comptage par joueur.
 - 🏆 Détection des objectifs atteints et de la fin d'une room.
-- 💡 Suivi des indices (*hints*) Archipelago.
+- 💡 Suivi des indices (_hints_) Archipelago.
 - 📦 Gestion des événements groupés **Release / Collect**, avec limitation des notifications redondantes.
 - 🌐 Surveillance de plusieurs rooms grâce à des connexions WebSocket asynchrones.
 - 🔄 Reconnexion automatique après une perte de connexion.
@@ -21,14 +27,14 @@ Il associe les slots Archipelago à des membres Discord, suit plusieurs rooms si
 
 ## Technologies
 
-| Technologie | Utilisation |
-| --- | --- |
-| Python | Langage principal |
-| discord.py | Bot Discord et commandes slash |
-| websockets | Connexions aux serveurs Archipelago |
-| asyncio | Surveillance concurrente des rooms |
-| python-dotenv | Chargement du token depuis `.env` |
-| JSON | Persistance de la configuration des rooms |
+| Technologie   | Utilisation                               |
+| ------------- | ----------------------------------------- |
+| Python        | Langage principal                         |
+| discord.py    | Bot Discord et commandes slash            |
+| websockets    | Connexions aux serveurs Archipelago       |
+| asyncio       | Surveillance concurrente des rooms        |
+| python-dotenv | Chargement du token depuis `.env`         |
+| JSON          | Persistance de la configuration des rooms |
 
 ## Installation
 
@@ -173,6 +179,15 @@ En cas de déconnexion, le gestionnaire de moniteurs tente de rétablir la conne
 - Ne jamais committer `.env`, un token Discord ou des mots de passe réels.
 - Limiter les permissions du bot Discord à celles nécessaires à son fonctionnement.
 - **Attention :** le client WebSocket du projet désactive actuellement la vérification des certificats TLS pour les connexions sécurisées. Ce comportement est à corriger avant un déploiement exposé ou sensible.
+
+## 📜 Informations légales
+
+L'utilisation d'**Archipelago Notifier** est soumise aux documents suivants :
+
+- 📋 [Conditions d'Utilisation](https://github.com/Mineteck/archipelago_notifier/blob/main/TERMS_OF_SERVICE.md)
+- 🔒 [Politique de Confidentialité](https://github.com/Mineteck/archipelago_notifier/blob/main/PRIVACY_POLICY.md)
+
+En utilisant le bot, vous acceptez les Conditions d'Utilisation et reconnaissez avoir pris connaissance de la Politique de Confidentialité.
 
 ## Contribution
 
