@@ -1,34 +1,34 @@
-# Conditions d’utilisation — Archipelago Notifier
+# Terms of Service — Archipelago Notifier
 
-**Dernière mise à jour : 30 octobre 2026**
+**Last updated: October 30, 2026**
 
-## 1. Objet
-Archipelago Notifier (« le Bot ») est un bot Discord communautaire permettant de relayer dans des salons Discord des événements provenant de sessions Archipelago (notamment des notifications de progression, objets et autres événements pris en charge).
+## 1. Purpose
+Archipelago Notifier (the “Bot”) is a community Discord bot that posts events from Archipelago sessions to Discord channels, including supported progress, item, and other game notifications.
 
-Le Bot est un projet indépendant et n'est ni affilié ni officiellement approuvé par Discord ou Archipelago.
+The Bot is an independent project and is not affiliated with or officially endorsed by Discord or Archipelago.
 
-## 2. Acceptation
-L'ajout ou l'utilisation du Bot implique l'acceptation des présentes conditions, ainsi que le respect des règles de Discord et des communautés dans lesquelles il est utilisé. Si vous n'acceptez pas ces conditions, cessez de l'utiliser et retirez-le de votre serveur.
+## 2. Acceptance
+By adding or using the Bot, you agree to these Terms and to follow Discord's rules and the rules of the communities where the Bot is used. If you disagree, stop using the Bot and remove it from your server.
 
-## 3. Utilisation autorisée
-Vous devez disposer des autorisations nécessaires pour configurer le Bot et les salons dans lesquels il publie. Vous vous engagez à ne pas utiliser le Bot pour harceler, spammer, contourner des permissions, compromettre un service ou enfreindre la loi ou les règles de Discord.
+## 3. Permitted Use
+You must have the necessary permissions to configure the Bot and the channels where it posts. You agree not to use the Bot to harass, spam, bypass permissions, compromise services, or violate applicable laws or Discord policies.
 
-Vous êtes responsable des informations de connexion à une session Archipelago que vous fournissez et de leur partage éventuel dans votre serveur.
+You are responsible for the Archipelago connection details you provide and for any decision to share them within your server.
 
-## 4. Fonctionnement et disponibilité
-Le Bot dépend notamment de Discord, des serveurs Archipelago et de la connectivité réseau. Son fonctionnement peut être interrompu, modifié ou suspendu, sans garantie de disponibilité permanente, de réception de tous les événements ou de livraison instantanée des notifications.
+## 4. Operation and Availability
+The Bot depends on Discord, Archipelago servers, and network connectivity. It may be interrupted, modified, or suspended. Continuous availability, delivery of every event, and instant notifications are not guaranteed.
 
-## 5. Modération et suspension
-L'exploitant peut limiter ou interrompre l'accès au Bot en cas d'abus, de risque de sécurité, de problème technique ou de non-respect de ces conditions.
+## 5. Moderation and Suspension
+The operator may restrict or suspend access to the Bot in cases of abuse, security risks, technical issues, or violations of these Terms.
 
-## 6. Données personnelles
-Le traitement des données associé au Bot est décrit dans la [Politique de confidentialité](./PRIVACY_POLICY.md).
+## 6. Personal Data
+Data handling is described in the [Privacy Policy](./PRIVACY_POLICY.md).
 
-## 7. Responsabilité
-Le Bot est fourni gratuitement « en l'état », dans les limites autorisées par la loi applicable. L'exploitant ne garantit pas l'absence d'erreurs ni l'adéquation du service à un besoin particulier. Aucune disposition n'exclut une responsabilité qui ne pourrait légalement être exclue.
+## 7. Liability
+The Bot is provided free of charge, “as is,” to the extent permitted by applicable law. The operator does not guarantee that the service is error-free or suitable for a particular purpose. Nothing in these Terms excludes liability that cannot legally be excluded.
 
-## 8. Modifications
-Ces conditions peuvent être modifiées pour refléter les évolutions du Bot ou les obligations applicables. La date de mise à jour sera adaptée lors de toute modification importante.
+## 8. Changes
+These Terms may be updated to reflect changes to the Bot or applicable requirements. The date above will be updated when material changes are made.
 
 ## 9. Contact
-Pour toute question ou réclamation, ouvrez une issue sur le dépôt officiel : https://github.com/Mineteck/archipelago_notifier/issues (évitez d'y publier des données personnelles ou des secrets). Pour une demande confidentielle, contactez l'exploitant par un canal privé indiqué sur son profil GitHub.
+For questions or complaints, open an issue in the official repository: https://github.com/Mineteck/archipelago_notifier/issues. Do not post personal information or secrets in public issues. For confidential matters, contact the operator through a private channel listed on their GitHub profile.

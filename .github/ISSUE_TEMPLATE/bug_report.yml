@@ -1,48 +1,48 @@
 name: "🐛 Bug report"
-description: Signaler un problème avec Archipelago Notifier.
+description: Report a problem with Archipelago Notifier.
 title: "[Bug]: "
 labels: ["bug"]
 body:
   - type: markdown
     attributes:
-      value: "Merci de prendre le temps de signaler ce problème. Ne partagez jamais de token Discord ou de mot de passe Archipelago."
+      value: "Thanks for reporting this issue. Never share Discord tokens or Archipelago passwords."
   - type: textarea
     id: description
     attributes:
-      label: Description du problème
-      description: Que s'est-il passé ?
-      placeholder: Décrivez le bug rencontré.
+      label: Bug description
+      description: What happened?
+      placeholder: Describe the issue you encountered.
     validations:
       required: true
   - type: textarea
     id: reproduce
     attributes:
-      label: Étapes pour reproduire
-      placeholder: "1. Exécuter /add_room...\n2. ...\n3. Observer l'erreur"
+      label: Steps to reproduce
+      placeholder: "1. Run /add_room...\n2. ...\n3. Observe the error"
     validations:
       required: true
   - type: textarea
     id: expected
     attributes:
-      label: Comportement attendu
-      placeholder: Que devrait-il se passer ?
+      label: Expected behavior
+      placeholder: What should have happened?
     validations:
       required: true
   - type: textarea
     id: logs
     attributes:
-      label: Logs ou captures d'écran (facultatif)
-      description: Masquez les tokens, mots de passe et autres données sensibles.
+      label: Logs or screenshots (optional)
+      description: Redact tokens, passwords, and other sensitive information.
       render: shell
     validations:
       required: false
   - type: dropdown
     id: hosting
     attributes:
-      label: Environnement
+      label: Environment
       options:
-        - Bot public
-        - Instance auto-hébergée
-        - Autre
+        - Public bot
+        - Self-hosted instance
+        - Other
     validations:
       required: true

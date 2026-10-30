@@ -2,201 +2,209 @@
 
 ![Python](https://img.shields.io/badge/Python-3-blue?logo=python) ![Discord](https://img.shields.io/badge/Discord-Bot-5865F2?logo=discord) ![Archipelago](https://img.shields.io/badge/Archipelago-Multiworld-informational)
 
-**Archipelago Notifier** est un bot Discord écrit en Python qui surveille des parties multiworld [Archipelago](https://archipelago.gg/) et relaie automatiquement leurs événements dans des salons Discord.
+**Archipelago Notifier** is a Python Discord bot that monitors [Archipelago](https://archipelago.gg/) multiworld sessions and automatically forwards game events to Discord channels.
 
-Il associe les slots Archipelago à des membres Discord, suit plusieurs rooms simultanément et conserve l'état des parties pour faciliter leur suivi.
+It links Archipelago slots to Discord members, monitors multiple rooms simultaneously, and saves session progress to make games easier to follow.
 
-## 🤖 Inviter le bot
+## 🤖 Invite the Bot
 
-Ajoutez **Archipelago Notifier** à votre serveur Discord pour recevoir les notifications de vos parties Archipelago.
+Add **Archipelago Notifier** to your Discord server to receive notifications from your Archipelago sessions.
 
-[![Inviter le bot](https://img.shields.io/badge/Discord-Inviter_le_bot-5865F2?logo=discord&logoColor=white)](https://discord.com/oauth2/authorize?client_id=1540372862513455215)
+[![Invite the bot](https://img.shields.io/badge/Discord-Invite_the_Bot-5865F2?logo=discord&logoColor=white)](https://discord.com/oauth2/authorize?client_id=1540372862513455215)
 
-## Fonctionnalités
+## Features
 
-- 🔔 Notifications Discord lors de la réception d'objets, y compris les objets en attente.
-- 💀 Suivi des morts **DeathLink** et comptage par joueur.
-- 🏆 Détection des objectifs atteints et de la fin d'une room.
-- 💡 Suivi des indices (_hints_) Archipelago.
-- 📦 Gestion des événements groupés **Release / Collect**, avec limitation des notifications redondantes.
-- 🌐 Surveillance de plusieurs rooms grâce à des connexions WebSocket asynchrones.
-- 🔄 Reconnexion automatique après une perte de connexion.
-- 👥 Association des slots Archipelago aux utilisateurs Discord.
-- 💾 Sauvegarde de la configuration et de la progression dans `rooms.json`.
-- 🛠️ Administration via des commandes slash Discord.
+- 🔔 Discord notifications for received items, including pending items.
+- 💀 **DeathLink** event tracking and death counts per player.
+- 🏆 Goal completion and room completion detection.
+- 💡 Archipelago hint tracking.
+- 📦 **Release / Collect** event handling, with reduced duplicate notifications.
+- 🌐 Concurrent monitoring of multiple rooms through asynchronous WebSocket connections.
+- 🔄 Automatic reconnection after connection loss.
+- 👥 Archipelago slot-to-Discord user associations.
+- 💾 Configuration and progress saved in `rooms.json`.
+- 🛠️ Administration through Discord slash commands.
 
 ## Technologies
 
-| Technologie   | Utilisation                               |
-| ------------- | ----------------------------------------- |
-| Python        | Langage principal                         |
-| discord.py    | Bot Discord et commandes slash            |
-| websockets    | Connexions aux serveurs Archipelago       |
-| asyncio       | Surveillance concurrente des rooms        |
-| python-dotenv | Chargement du token depuis `.env`         |
-| JSON          | Persistance de la configuration des rooms |
+| Technology | Purpose |
+| --- | --- |
+| Python | Main programming language |
+| discord.py | Discord bot and slash commands |
+| websockets | Connections to Archipelago servers |
+| asyncio | Concurrent room monitoring |
+| python-dotenv | Loading the bot token from `.env` |
+| JSON | Persistent room configuration |
 
 ## Installation
 
-### Prérequis
+### Requirements
 
-- Python 3 et `pip` (utiliser une version compatible avec `requirements.txt`).
-- Un bot créé dans le [Discord Developer Portal](https://discord.com/developers/applications).
-- Un serveur Discord sur lequel inviter le bot avec les autorisations nécessaires.
-- Une room Archipelago accessible et au moins un slot valide pour s'y connecter.
+- Python 3 and `pip` (use a version compatible with `requirements.txt`).
+- A bot created in the [Discord Developer Portal](https://discord.com/developers/applications).
+- A Discord server where you can invite the bot with the required permissions.
+- An accessible Archipelago room and at least one valid slot to connect with.
 
-### 1. Cloner le dépôt
+### 1. Clone the repository
 
 ```bash
 git clone https://github.com/Mineteck/archipelago_notifier.git
 cd archipelago_notifier
 ```
 
-### 2. Créer un environnement virtuel
+### 2. Create a virtual environment
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
 ```
 
-Sous Windows :
+On Windows:
 
 ```powershell
 .venv\Scripts\activate
 ```
 
-### 3. Installer les dépendances
+### 3. Install dependencies
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### 4. Configurer Discord
+### 4. Configure Discord
 
-Copier le fichier d'exemple :
+Copy the example environment file:
 
 ```bash
 cp .env.example .env
 ```
 
-Renseigner le token de votre bot dans `.env` :
+Set your bot token in `.env`:
 
 ```dotenv
-DISCORD_TOKEN=votre_token_discord
+DISCORD_TOKEN=your_discord_token
 ```
 
-**Ne publiez jamais votre token Discord.** Gardez `.env` hors du contrôle de version.
+**Never publish your Discord token.** Keep `.env` out of version control.
 
-### 5. Démarrer le bot
+### 5. Start the bot
 
 ```bash
 python bot_AI.py
 ```
 
-Au démarrage, le bot se connecte à Discord, synchronise ses commandes slash et relance la surveillance des rooms enregistrées qui ne sont pas terminées.
+On startup, the bot connects to Discord, synchronizes its slash commands, and resumes monitoring saved rooms that have not been completed.
 
-## Utilisation
+## Usage
 
-### Ajouter une room
+### Add a room
 
-Dans le salon Discord où vous souhaitez recevoir les notifications :
-
-```text
-/add_room port:<port> slot_name:<nom_du_slot> game:<jeu> password:<mot_de_passe_optionnel>
-```
-
-Le paramètre `port` correspond au port de la room hébergée sur `archipelago.gg`. Le bot construit l'adresse `wss://archipelago.gg:<port>`.
-
-Cette commande nécessite la permission Discord **Gérer le serveur**.
-
-### Associer d'autres joueurs
+In the Discord channel where you want to receive notifications:
 
 ```text
-/join port:<port> slot_name:<nom_du_slot> game:<jeu>
+/add_room port:<port> slot_name:<slot_name> game:<game> password:<optional_password>
 ```
 
-Le slot est associé au compte Discord qui lance la commande. Un paramètre `user` optionnel permet de désigner un autre membre.
+The `port` parameter is the port of the room hosted on `archipelago.gg`. The bot builds the address `wss://archipelago.gg:<port>`.
 
-### Consulter les rooms
+This command requires the Discord **Manage Server** permission.
+
+### Link other players
+
+```text
+/join port:<port> slot_name:<slot_name> game:<game>
+```
+
+The slot is linked to the Discord account running the command. An optional `user` parameter lets you select another member.
+
+### View rooms
 
 ```text
 /rooms
 ```
 
-Affiche les rooms enregistrées, les slots, les jeux, les membres associés et leur progression.
+Displays registered rooms, slots, games, linked members, and their progress.
 
-### Changer le salon de notifications
+### Change the notification channel
 
 ```text
 /set_channel port:<port>
 ```
 
-Définit le salon Discord courant comme destination des notifications de la room.
+Sets the current Discord channel as the notification destination for the room.
 
-### Recharger la configuration
+### Reload configuration
 
 ```text
 /reload_rooms
 ```
 
-Recharge la configuration enregistrée et démarre les surveillances nécessaires.
+Reloads saved configuration and starts any required monitoring tasks.
 
-D'autres commandes de gestion sont définies dans [`commands.py`](commands.py).
+Additional management commands are defined in [`commands.py`](commands.py).
 
-## Architecture
+## Project Structure
 
 ```text
 archipelago_notifier/
-├── .github/workflows/     # Automatisations GitHub
-├── .env.example           # Exemple de configuration du bot
-├── archipelago_monitor.py # Client WebSocket et événements Archipelago
-├── bot_AI.py              # Point d'entrée du bot Discord
-├── commands.py            # Commandes slash Discord
-├── monitor_manager.py     # Cycle de vie et reconnexion des moniteurs
-├── notifications.py       # Construction et envoi des notifications
-├── requirements.txt       # Dépendances Python
-├── rooms_config.py        # Lecture et écriture des rooms
-└── shared.py              # État et objets partagés
+├── .github/workflows/     # GitHub automation
+├── .env.example           # Example bot configuration
+├── archipelago_monitor.py # WebSocket client and Archipelago events
+├── bot_AI.py              # Discord bot entry point
+├── commands.py            # Discord slash commands
+├── monitor_manager.py     # Monitor lifecycle and reconnection
+├── notifications.py       # Notification formatting and delivery
+├── requirements.txt       # Python dependencies
+├── rooms_config.py        # Room configuration persistence
+└── shared.py              # Shared state and objects
 ```
 
-### Fonctionnement général
+### How It Works
 
-1. Le bot Discord démarre et synchronise ses commandes slash.
-2. Les rooms configurées sont chargées depuis `rooms.json`.
-3. Une tâche asynchrone est lancée pour chaque room active.
-4. Chaque moniteur se connecte au serveur Archipelago par WebSocket avec un slot valide.
-5. Les événements Archipelago sont interprétés puis transformés en notifications Discord.
-6. La progression est sauvegardée ; une room entièrement terminée cesse d'être surveillée.
+1. The Discord bot starts and synchronizes its slash commands.
+2. Configured rooms are loaded from `rooms.json`.
+3. An asynchronous task is started for each active room.
+4. Each monitor connects to the Archipelago server via WebSocket using a valid slot.
+5. Archipelago events are interpreted and turned into Discord notifications.
+6. Progress is saved; fully completed rooms are no longer monitored.
 
-## Persistance et reconnexion
+## Persistence and Reconnection
 
-Les informations des rooms et des slots sont enregistrées dans `rooms.json`, notamment les associations Discord, le nombre de morts et l'état de complétion des objectifs.
+Room and slot information is saved in `rooms.json`, including Discord associations, death counts, and goal completion status.
 
-En cas de déconnexion, le gestionnaire de moniteurs tente de rétablir la connexion. Les rooms déjà terminées ne sont pas redémarrées automatiquement.
+If a connection drops, the monitor manager attempts to reconnect. Completed rooms are not automatically restarted.
 
-## Sécurité
+## Security
 
-- Ne jamais committer `.env`, un token Discord ou des mots de passe réels.
-- Limiter les permissions du bot Discord à celles nécessaires à son fonctionnement.
-- **Attention :** le client WebSocket du projet désactive actuellement la vérification des certificats TLS pour les connexions sécurisées. Ce comportement est à corriger avant un déploiement exposé ou sensible.
+- Never commit `.env`, Discord tokens, or real passwords.
+- Grant the bot only the Discord permissions it needs.
+- **Warning:** the project's WebSocket client currently disables TLS certificate verification for secure connections. This should be fixed before deploying in a sensitive or exposed environment.
 
-## 📜 Informations légales
+## 🆘 Support
 
-L'utilisation d'**Archipelago Notifier** est soumise aux documents suivants :
+Having trouble with Archipelago Notifier or want to suggest a feature?
 
-- 📋 [Conditions d'Utilisation](https://github.com/Mineteck/archipelago_notifier/blob/main/TERMS_OF_SERVICE.md)
-- 🔒 [Politique de Confidentialité](https://github.com/Mineteck/archipelago_notifier/blob/main/PRIVACY_POLICY.md)
+- 🐛 [Report a bug](https://github.com/Mineteck/archipelago_notifier/issues/new?template=bug_report.yml)
+- 💡 [Request a feature](https://github.com/Mineteck/archipelago_notifier/issues/new?template=feature_request.yml)
+- 📖 [Browse the source code](https://github.com/Mineteck/archipelago_notifier)
 
-En utilisant le bot, vous acceptez les Conditions d'Utilisation et reconnaissez avoir pris connaissance de la Politique de Confidentialité.
+## 📜 Legal Information
 
-## Contribution
+Use of **Archipelago Notifier** is subject to the following documents:
 
-Les suggestions et corrections peuvent être proposées via les [issues](https://github.com/Mineteck/archipelago_notifier/issues) et les pull requests du dépôt.
+- 📋 [Terms of Service](https://github.com/Mineteck/archipelago_notifier/blob/main/TERMS_OF_SERVICE.md)
+- 🔒 [Privacy Policy](https://github.com/Mineteck/archipelago_notifier/blob/main/PRIVACY_POLICY.md)
 
-## Auteur
+By using the bot, you agree to the Terms of Service and acknowledge the Privacy Policy.
 
-Projet développé par [Mineteck](https://github.com/Mineteck).
+## Contributing
+
+Suggestions and fixes are welcome through [issues](https://github.com/Mineteck/archipelago_notifier/issues) and pull requests.
+
+## Author
+
+Developed by [Mineteck](https://github.com/Mineteck).
 
 ---
 
-> Projet communautaire indépendant, non affilié officiellement à Archipelago ou Discord.
+> Independent community project, not officially affiliated with Archipelago or Discord.

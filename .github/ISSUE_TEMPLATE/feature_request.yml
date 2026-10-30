@@ -1,37 +1,37 @@
 name: "💡 Feature request"
-description: Proposer une amélioration ou une nouvelle fonctionnalité.
+description: Suggest an improvement or new feature.
 title: "[Enhancement]: "
 labels: ["enhancement"]
 body:
   - type: markdown
     attributes:
-      value: "Merci de contribuer à l'amélioration d'Archipelago Notifier !"
+      value: "Thanks for helping improve Archipelago Notifier!"
   - type: textarea
     id: problem
     attributes:
-      label: Besoin ou problème rencontré
-      description: Quel besoin cette amélioration permettrait-elle de couvrir ?
-      placeholder: Actuellement, il est difficile de...
+      label: Problem or need
+      description: What problem would this improvement solve?
+      placeholder: Currently, it is difficult to...
     validations:
       required: true
   - type: textarea
     id: solution
     attributes:
-      label: Amélioration proposée
-      placeholder: J'aimerais que le bot puisse...
+      label: Proposed improvement
+      placeholder: I would like the bot to...
     validations:
       required: true
   - type: textarea
     id: alternatives
     attributes:
-      label: Alternatives envisagées (facultatif)
-      placeholder: Avez-vous envisagé d'autres solutions ?
+      label: Alternatives considered (optional)
+      placeholder: Have you considered other solutions?
     validations:
       required: false
   - type: textarea
     id: context
     attributes:
-      label: Informations complémentaires (facultatif)
-      placeholder: Exemples, captures d'écran ou liens utiles.
+      label: Additional context (optional)
+      placeholder: Examples, screenshots, or useful links.
     validations:
       required: false
