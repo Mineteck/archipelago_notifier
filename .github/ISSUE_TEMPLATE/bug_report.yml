@@ -1,0 +1,48 @@
+name: "🐛 Bug report"
+description: Signaler un problème avec Archipelago Notifier.
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: "Merci de prendre le temps de signaler ce problème. Ne partagez jamais de token Discord ou de mot de passe Archipelago."
+  - type: textarea
+    id: description
+    attributes:
+      label: Description du problème
+      description: Que s'est-il passé ?
+      placeholder: Décrivez le bug rencontré.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Étapes pour reproduire
+      placeholder: "1. Exécuter /add_room...\n2. ...\n3. Observer l'erreur"
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Comportement attendu
+      placeholder: Que devrait-il se passer ?
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs ou captures d'écran (facultatif)
+      description: Masquez les tokens, mots de passe et autres données sensibles.
+      render: shell
+    validations:
+      required: false
+  - type: dropdown
+    id: hosting
+    attributes:
+      label: Environnement
+      options:
+        - Bot public
+        - Instance auto-hébergée
+        - Autre
+    validations:
+      required: true
