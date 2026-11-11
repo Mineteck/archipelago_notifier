@@ -21,6 +21,13 @@ from notifications import (
     notify_room_complete,
 )
 
+# Version du protocole Archipelago prise en charge par ce bot.
+ARCHIPELAGO_VERSION = {
+    "major": 0,
+    "minor": 6,
+    "build": 8,
+    "class": "Version",
+}
 
 class ArchipelagoMonitor:
     """
@@ -105,6 +112,28 @@ class ArchipelagoMonitor:
             cmd = pkt.get("cmd")
 
             if cmd == "RoomInfo":
+                version = pkt.get("version", {})
+                generator_version = pkt.get("generator_version", {})
+
+                server_version = (
+                    f"{version.get('major', '?')}."
+                    f"{version.get('minor', '?')}."
+                    f"{version.get('build', '?')}"
+                )
+
+                generator = (
+                    f"{generator_version.get('major', '?')}."
+                    f"{generator_version.get('minor', '?')}."
+                    f"{generator_version.get('build', '?')}"
+                )
+
+                log.info(
+                    "[%s] Version du serveur : %s | Générateur : %s",
+                    self.server_url,
+                    server_version,
+                    generator,
+                )
+
                 games = self.config.games_for(self.server_url)
                 await self.send([{"cmd": "GetDataPackage", "games": games}])
 
@@ -282,11 +311,11 @@ class ArchipelagoMonitor:
     async def connect_monitor(self):
         await self.send([{
             "cmd": "Connect",
-            "game": self.connect_game,
+            "game": None,
             "name": self.connect_slot_name,
             "password": self.password or None,
             "uuid": f"ap-discord-bot-monitor-{self.server_url}",
-            "version": {"major": 0, "minor": 5, "build": 0, "class": "Version"},
+            "version": ARCHIPELAGO_VERSION,
             "items_handling": 0,
             "tags": ["TextOnly", "DeathLink"],
             "slot_data": False,
