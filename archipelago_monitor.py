@@ -311,7 +311,7 @@ class ArchipelagoMonitor:
     async def connect_monitor(self):
         await self.send([{
             "cmd": "Connect",
-            "game": self.connect_game,
+            "game": none,
             "name": self.connect_slot_name,
             "password": self.password or None,
             "uuid": f"ap-discord-bot-monitor-{self.server_url}",
